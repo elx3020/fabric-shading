@@ -32,3 +32,22 @@ export { wovenPresets, type WovenPreset, type YarnData } from './presets.ts';
 export { bakeMomentMips, type MomentLevel } from './patterns/moments.ts';
 export { bakeWaveNoise, decodeWaveNoise, defaultWaveNoiseParams, encodeWaveNoise, WAVE_NOISE_MAX, type WaveNoiseParams, type WaveNoiseTiles } from './noise/waveNoise.ts';
 export { fiberSggx, sggxD, sggxSigma, sggxSpecular, tangentMoment, type Sym3 } from './shading/sggx.ts';
+export {
+  bakeTwoLayerLut,
+  defaultTwoLayerParams,
+  gapAt,
+  hemisphericalAlbedo,
+  layerAlbedo,
+  twoLayerAlbedo,
+  type TwoLayerLut,
+  type TwoLayerParams,
+} from './lut/twoLayer.ts';
+export {
+  bakeDiffractionLut,
+  defaultDiffractionLutParams,
+  diffractionDensity,
+  diffractionLutR,
+  slitProfile,
+  type DiffractionLut,
+  type DiffractionLutParams,
+} from './lut/diffraction.ts';
