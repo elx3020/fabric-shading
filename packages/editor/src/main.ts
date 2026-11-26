@@ -7,6 +7,8 @@ import {
   bakeDiffractionLut,
   bakeTwoLayerLut,
   bakeWaveNoise,
+  readFabric,
+  writeFabric,
   defaultWaveNoiseParams,
   bakeWeaveMaps,
   defaultKnitParams,
@@ -21,6 +23,9 @@ import {
   twillWeave,
   wovenPresets,
   type KnitPattern,
+  type MomentLevel,
+  type TwoLayerLut,
+  type WaveNoiseTiles,
   type YarnData,
   type WeaveMaps,
   type WeaveParams,
@@ -113,11 +118,16 @@ async function start(): Promise<void> {
   let noiseMs = 0;
   let statusBase = '';
 
+  /** What the last bake (or import) produced; this is what Export writes. */
+  let baked: { name: string; maps: WeaveMaps; moments: MomentLevel[] } | undefined;
+  let noiseTiles: WaveNoiseTiles;
+  let twoLayerLut: TwoLayerLut;
+
   function bakeNoise(): ReturnType<typeof makeNoiseTexture> {
     const t0 = performance.now();
-    const tiles = bakeWaveNoise({ correlation: state.noiseCorrelation, highOrderCorrelation: state.noiseHighOrder, seed: state.noiseSeed });
+    noiseTiles = bakeWaveNoise({ correlation: state.noiseCorrelation, highOrderCorrelation: state.noiseHighOrder, seed: state.noiseSeed });
     noiseMs = performance.now() - t0;
-    return makeNoiseTexture(tiles);
+    return makeNoiseTexture(noiseTiles);
   }
   let noise = bakeNoise();
   const diffractionLut = bakeDiffractionLut();
@@ -133,13 +143,17 @@ async function start(): Promise<void> {
   /** Two-layer table depends on colour, gap fraction and yarn density; cheap, rebaked on change. */
   function rebakeTwoLayer(): void {
     const linear = previewUniforms.color.value;
-    const lut = bakeTwoLayerLut({
+    setTwoLayer(bakeTwoLayerLut({
       albedo: [linear.r, linear.g, linear.b],
       tau: state.yarnTau,
       backFraction: state.backFraction,
       gapFraction,
       gapDepth: state.fabric === 'knit' ? state.yarnRadius * 2 : state.flatness * 0.5,
-    });
+    }));
+  }
+
+  function setTwoLayer(lut: TwoLayerLut): void {
+    twoLayerLut = lut;
     twoLayer?.dispose();
     twoLayer = makeTwoLayerTexture(lut);
     if (textures) {
@@ -159,7 +173,7 @@ async function start(): Promise<void> {
   }
 
   function showStatus(): void {
-    status.textContent = `${statusBase} · noise ${noiseMs.toFixed(0)} ms`;
+    status.textContent = noiseMs > 0 ? `${statusBase} · noise ${noiseMs.toFixed(0)} ms` : statusBase;
   }
 
   function rebakeNoise(): void {
@@ -239,12 +253,19 @@ async function start(): Promise<void> {
     const ms = performance.now() - t0;
     const mips = bakeMomentMips(maps);
     const ms2 = performance.now() - t0 - ms;
+    install(name, maps, mips, `${name} · ${maps.size}² texels · maps ${ms.toFixed(0)} ms · specular mips ${ms2.toFixed(0)} ms`);
+  }
+
+  /** Uploads baked maps; uses `lut` as the two-layer table if given, otherwise rebakes it. */
+  function install(name: string, maps: WeaveMaps, mips: MomentLevel[], statusText: string, lut?: TwoLayerLut): void {
+    baked = { name, maps, moments: mips };
     if (textures) for (const t of [textures.weave, textures.relief, textures.momentA, textures.momentB]) t.dispose();
     let gaps = 0;
     for (let i = 2; i < maps.relief.length; i += 4) gaps += maps.relief[i]!;
     gapFraction = gaps / 255 / (maps.size * maps.size);
     updateLight();
-    rebakeTwoLayer();
+    if (lut) setTwoLayer(lut);
+    else rebakeTwoLayer();
     textures = {
       ...makeTextures(maps),
       ...makeMomentTextures(mips),
@@ -257,9 +278,55 @@ async function start(): Promise<void> {
     aspect = maps.aspect;
     updateLight();
     rebuildMaterial();
-    statusBase = `${name} · ${maps.size}² texels · maps ${ms.toFixed(0)} ms · specular mips ${ms2.toFixed(0)} ms`;
+    statusBase = statusText;
     showStatus();
   }
+
+  async function exportFabric(): Promise<void> {
+    if (!baked) return;
+    const bytes = await writeFabric({
+      name: baked.name,
+      settings: { ...state, yarnsPerRepeat },
+      maps: baked.maps,
+      moments: baked.moments,
+      twoLayer: twoLayerLut,
+      noise: noiseTiles,
+    });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/octet-stream' }));
+    link.download = `${baked.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.fabric`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    status.textContent = `${statusBase} · exported ${(bytes.byteLength / 1024).toFixed(0)} KB`;
+  }
+
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = '.fabric';
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = '';
+    if (!file) return;
+    try {
+      const asset = await readFabric(new Uint8Array(await file.arrayBuffer()));
+      // Restore known editor settings only; files from other versions may carry extra keys.
+      for (const [key, value] of Object.entries(asset.settings)) {
+        if (key in state && typeof value === typeof (state as Record<string, unknown>)[key]) (state as Record<string, unknown>)[key] = value;
+      }
+      if (typeof asset.settings.yarnsPerRepeat === 'number') yarnsPerRepeat = asset.settings.yarnsPerRepeat;
+      cancelAnimationFrame(pending);
+      noise.dispose();
+      noiseTiles = asset.noise;
+      noise = makeNoiseTexture(noiseTiles);
+      noiseMs = 0;
+      gui.controllersRecursive().forEach((c) => c.updateDisplay());
+      showFolders();
+      install(asset.name, asset.maps, asset.moments, `${asset.name} · ${asset.maps.size}² texels · imported from ${file.name}`, asset.twoLayer);
+    } catch (e) {
+      status.textContent = `Import failed: ${(e as Error).message}`;
+    }
+  });
+  const fileActions = { export: () => void exportFabric(), import: () => fileInput.click() };
 
   let pending = 0;
   const scheduleBake = () => {
@@ -403,6 +470,10 @@ async function start(): Promise<void> {
   sheerFolder.add(state, 'threadSpacing', 50, 2000, 10).name('Thread spacing (µm)').onChange(updateLight);
   sheerFolder.add(state, 'yarnTau', 0.1, 6, 0.05).name('Yarn density').onChange(rebakeTwoLayer);
   sheerFolder.add(state, 'backFraction', 0.05, 0.95, 0.01).name('Back-scatter fraction').onChange(rebakeTwoLayer);
+
+  const fileFolder = gui.addFolder('File');
+  fileFolder.add(fileActions, 'export').name('Export .fabric');
+  fileFolder.add(fileActions, 'import').name('Import .fabric');
 
   const noiseFolder = gui.addFolder('Wave noise');
   noiseFolder.add(state, 'noiseCorrelation', 0.75, 4, 0.05).name('Glint grain').onFinishChange(rebakeNoise);
