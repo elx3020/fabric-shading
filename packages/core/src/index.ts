@@ -30,4 +30,5 @@ export {
 export { knitPresets, type KnitPreset } from './presets.ts';
 export { wovenPresets, type WovenPreset, type YarnData } from './presets.ts';
 export { bakeMomentMips, type MomentLevel } from './patterns/moments.ts';
+export { bakeWaveNoise, decodeWaveNoise, defaultWaveNoiseParams, encodeWaveNoise, WAVE_NOISE_MAX, type WaveNoiseParams, type WaveNoiseTiles } from './noise/waveNoise.ts';
 export { fiberSggx, sggxD, sggxSigma, sggxSpecular, tangentMoment, type Sym3 } from './shading/sggx.ts';
