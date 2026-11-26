@@ -36,6 +36,7 @@ pnpm dev:phone  # same editor over https, reachable from a phone on your LAN
 pnpm demo       # fabric material on a waving cloth plane at http://localhost:5174
 pnpm demo:phone # same demo over https for a phone or tablet
 pnpm test       # unit tests
+pnpm --filter @fabric-shading/core build  # library build to packages/core/dist (JS + .d.ts)
 pnpm typecheck
 ```
 
@@ -50,6 +51,8 @@ import { FabricMaterial } from '@fabric-shading/core/material';
 const material = new FabricMaterial(fabricFromPreset('silk-organza'), { repeats: 24 });
 mesh.material = material; // works with three.js lights and scene.environment, no mesh tangents needed
 ```
+
+The library's API is documented in [packages/core/README.md](packages/core/README.md). Inside this workspace, the apps import the core's TypeScript sources directly (the `source` export condition), so no build is needed while developing.
 
 **File › Export .fabric** saves the baked fabric (maps, specular mips, noise tiles, opacity table and the editor settings) as one gzip-compressed file of a few hundred KB. **Import .fabric** opens it again without rebaking.
 
