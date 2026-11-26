@@ -1,7 +1,7 @@
 import { Color, DataArrayTexture, DataTexture, DataUtils, HalfFloatType, LinearFilter, LinearMipmapLinearFilter, MeshBasicNodeMaterial, NearestFilter, RepeatWrapping, RGBAFormat, UnsignedByteType, Vector2, Vector3 } from 'three/webgpu';
-import { abs, asin, atan, cameraPosition, clamp, cross, dot, exp, float, floor, fract, fwidth, int, length, max, mix, normalize, positionWorld, pow, select, sin, sqrt, texture, uniform, uv, vec2, vec3 } from 'three/tsl';
+import { abs, asin, atan, cameraPosition, clamp, cross, dot, exp, float, floor, fract, fwidth, int, length, log, max, mix, smoothstep, step, normalize, positionWorld, pow, select, sin, sqrt, texture, uniform, uv, vec2, vec3 } from 'three/tsl';
 import type { Node } from 'three/webgpu';
-import { WAVE_NOISE_MAX, type MomentLevel, type WaveNoiseTiles, type WeaveMaps } from '@fabric-shading/core';
+import { WAVE_NOISE_MAX, type DiffractionLut, type MomentLevel, type TwoLayerLut, type WaveNoiseTiles, type WeaveMaps } from '@fabric-shading/core';
 
 export const views = ['lit (SGGX, filtered)', 'lit (unfiltered)', 'tangent', 'across h', 'along z', 'height', 'occlusion', 'gap', 'yarn id', 'noise tiles'] as const;
 export type View = (typeof views)[number];
@@ -20,7 +20,18 @@ export const previewUniforms = {
   glint: uniform(0.5),
   /** Yarns across one repeat, to estimate how many plies a pixel covers. */
   yarnsPerRepeat: uniform(4),
+  /** Irradiance of the light when it is behind the cloth. */
+  backlight: uniform(1),
+  /** Gap half-widths across the warp (x) and weft (y) gaps, in micrometres. */
+  gapHalfWidth: uniform(new Vector2(50, 50)),
+  /** Coherent beam width over gap half-width, per axis (the diffraction table's r). */
+  beamRatio: uniform(new Vector2(2, 2)),
 };
+
+/** Wavelengths in micrometres for the R, G, B channels. */
+const WAVELENGTHS = [0.65, 0.55, 0.45] as const;
+/** Angular radius of the light (in sin theta); bounds the diffraction peak like a real lamp does. */
+const SOURCE_RADIUS = 0.004;
 
 export interface PreviewTextures {
   weave: DataTexture;
@@ -28,6 +39,9 @@ export interface PreviewTextures {
   momentA: DataTexture;
   momentB: DataTexture;
   noise: DataArrayTexture;
+  twoLayer: DataTexture;
+  diffraction: DataTexture;
+  diffractionLut: Pick<DiffractionLut, 'uMax' | 'rMin' | 'rMax'>;
   /** Instances per noise set; layers [0, n) reflection, [n, 2n) high-order. */
   noiseInstances: number;
 }
@@ -42,6 +56,28 @@ export function makeNoiseTexture(tiles: WaveNoiseTiles): DataArrayTexture {
   t.generateMipmaps = false;
   t.needsUpdate = true;
   return t;
+}
+
+function floatTexture(data: Float32Array, width: number, height: number): DataTexture {
+  const half = new Uint16Array(data.length);
+  for (let i = 0; i < data.length; i++) half[i] = DataUtils.toHalfFloat(data[i]!);
+  const t = new DataTexture(half, width, height, RGBAFormat, HalfFloatType);
+  t.magFilter = t.minFilter = LinearFilter;
+  t.generateMipmaps = false;
+  t.needsUpdate = true;
+  return t;
+}
+
+/** Two-layer table: 32 x 2, see bakeTwoLayerLut for the rows. */
+export function makeTwoLayerTexture(lut: TwoLayerLut): DataTexture {
+  return floatTexture(lut.data, lut.samples, 2);
+}
+
+/** Diffraction table, single channel expanded to RGBA half floats. */
+export function makeDiffractionTexture(lut: DiffractionLut): DataTexture {
+  const rgba = new Float32Array(lut.data.length * 4);
+  for (let i = 0; i < lut.data.length; i++) rgba[i * 4] = lut.data[i]!;
+  return floatTexture(rgba, lut.uSamples, lut.rSamples);
 }
 
 function decodeNoise(v: Node<'vec3'>): Node<'vec3'> {
@@ -234,11 +270,47 @@ function sggxLit(textures: PreviewTextures, st: Node<'vec2'>): Node<'vec3'> {
   const lsum = li.add(lo);
   const G = float(1).sub(exp(previewUniforms.thickness.negate().mul(lsum))).div(lsum);
   // Radiance = f * cos(theta_i); the cos cancels one of the 4 ci co.
-  const spec = D.mul(G).div(co.mul(4)).mul(previewUniforms.specular).mul(coverage);
-  const diffuse = previewUniforms.color.mul(max(L.z, 0).mul(0.75).add(0.25)).mul(r.y);
+  const front = step(0, L.z);
+  const spec = D.mul(G).div(co.mul(4)).mul(previewUniforms.specular).mul(coverage).mul(front);
+  // Two-layer gain: light bouncing between warp and weft brightens the reflection.
+  const mu = abs(L.z);
+  const layerRow = texture(textures.twoLayer, vec2(mu, 0.25));
+  const forwardRow = texture(textures.twoLayer, vec2(mu, 0.75));
+  const diffuse = previewUniforms.color.mul(L.z.mul(0.75).add(0.25)).mul(layerRow.rgb).mul(r.y).mul(front);
   const [glintSpec, glintDiffuse] = waveNoise(textures, st, H, V);
+  // Light from behind: diffuse transmission through the yarn, and diffraction through the gaps.
+  const back = float(1).sub(front);
+  const transmitted = forwardRow.rgb.mul(mu).mul(previewUniforms.backlight.div(Math.PI)).mul(back);
+  const diffraction = gapDiffraction(textures, V.add(L)).mul(layerRow.w).mul(previewUniforms.backlight).mul(back);
   const backdrop = vec3(0.05);
-  return mix(backdrop, diffuse.mul(glintDiffuse).add(glintSpec.mul(spec)), coverage);
+  const surface = diffuse.mul(glintDiffuse).add(glintSpec.mul(spec)).add(transmitted.mul(glintDiffuse));
+  // The diffraction peak is a view of the light itself: compress it so the cross stays readable.
+  return mix(backdrop, surface, coverage).add(diffraction.div(diffraction.add(1)));
+}
+
+/**
+ * Radiance of light diffracted through the weave gaps, per unit irradiance and open area.
+ * `deviation` is V + L for a light behind the cloth: zero when looking straight at the light.
+ * Separable: one 1D profile across the warp gaps (x) times one across the weft gaps (y), per
+ * wavelength, from the shared table (u = 2 pi a sin(theta) / lambda).
+ */
+function gapDiffraction(textures: PreviewTextures, deviation: Node<'vec3'>): Node<'vec3'> {
+  const { uMax, rMin, rMax } = textures.diffractionLut;
+  const rowOf = (ratio: Node<'float'>) => log(clamp(ratio, rMin, rMax).div(rMin)).div(Math.log(rMax / rMin));
+  const rowX = rowOf(previewUniforms.beamRatio.x);
+  const rowY = rowOf(previewUniforms.beamRatio.y);
+  const profile = (s: Node<'float'>, halfWidth: Node<'float'>, row: Node<'float'>, lambda: number): Node<'float'> => {
+    const scale = halfWidth.mul((2 * Math.PI) / lambda);
+    const u = abs(s).mul(scale);
+    // Fade out over the last 40% of the table so the cross arms taper instead of ending.
+    const fade = float(1).sub(smoothstep(uMax * 0.6, uMax, u));
+    const density = texture(textures.diffraction, vec2(u.div(uMax), row)).x.mul(scale).mul(fade);
+    // A lamp of finite size caps the peak density at about 1 / (2 * radius).
+    return density.div(density.mul(2 * SOURCE_RADIUS).add(1));
+  };
+  const channel = (lambda: number) =>
+    profile(deviation.x, previewUniforms.gapHalfWidth.x, rowX, lambda).mul(profile(deviation.y, previewUniforms.gapHalfWidth.y, rowY, lambda));
+  return vec3(channel(WAVELENGTHS[0]), channel(WAVELENGTHS[1]), channel(WAVELENGTHS[2]));
 }
 
 /**

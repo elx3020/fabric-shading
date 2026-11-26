@@ -4,6 +4,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
   bakeKnitMaps,
   bakeMomentMips,
+  bakeDiffractionLut,
+  bakeTwoLayerLut,
   bakeWaveNoise,
   defaultWaveNoiseParams,
   bakeWeaveMaps,
@@ -19,12 +21,13 @@ import {
   twillWeave,
   wovenPresets,
   type KnitPattern,
+  type YarnData,
   type WeaveMaps,
   type WeaveParams,
   type WeavePattern,
 } from '@fabric-shading/core';
 import { createFpsCounter } from './fps.ts';
-import { makeMomentTextures, makeNoiseTexture, makePreviewMaterial, makeTextures, previewUniforms, views, type PreviewTextures, type View } from './preview.ts';
+import { makeDiffractionTexture, makeMomentTextures, makeNoiseTexture, makePreviewMaterial, makeTwoLayerTexture, makeTextures, previewUniforms, views, type PreviewTextures, type View } from './preview.ts';
 
 const status = document.getElementById('status')!;
 
@@ -95,6 +98,10 @@ async function start(): Promise<void> {
     repeats: 8,
     lightAzimuth: 40,
     lightElevation: 50,
+    backlight: 1,
+    threadSpacing: 300,
+    yarnTau: 1.5,
+    backFraction: 0.35,
     color: '#d9521f',
     shininess: 64,
     ...defaultWeaveParams,
@@ -113,6 +120,43 @@ async function start(): Promise<void> {
     return makeNoiseTexture(tiles);
   }
   let noise = bakeNoise();
+  const diffractionLut = bakeDiffractionLut();
+  const diffraction = makeDiffractionTexture(diffractionLut);
+  let twoLayer: ReturnType<typeof makeTwoLayerTexture> | undefined;
+  let gapFraction = 0;
+
+  /** Approximate yarn diameter from ply count and diameter (circle packing of the plies). */
+  function yarnDiameterUm(yarn: YarnData): number {
+    return yarn.plyDiameterUm * ([1, 2, 2.15, 2.41][yarn.plies - 1] ?? Math.sqrt(yarn.plies) * 1.25);
+  }
+
+  /** Two-layer table depends on colour, gap fraction and yarn density; cheap, rebaked on change. */
+  function rebakeTwoLayer(): void {
+    const linear = previewUniforms.color.value;
+    const lut = bakeTwoLayerLut({
+      albedo: [linear.r, linear.g, linear.b],
+      tau: state.yarnTau,
+      backFraction: state.backFraction,
+      gapFraction,
+      gapDepth: state.fabric === 'knit' ? state.yarnRadius * 2 : state.flatness * 0.5,
+    });
+    twoLayer?.dispose();
+    twoLayer = makeTwoLayerTexture(lut);
+    if (textures) {
+      textures.twoLayer = twoLayer;
+      rebuildMaterial();
+    }
+  }
+
+  function updateGaps(): void {
+    const s = state.threadSpacing;
+    const knit = state.fabric === 'knit';
+    const ax = knit ? 0.2 * s : (Math.max(1 - state.warpWidth, 0.02) * s) / 2;
+    const ay = knit ? 0.2 * s : (Math.max(1 - state.weftWidth, 0.02) * s) / 2;
+    previewUniforms.gapHalfWidth.value.set(ax, ay);
+    // The coherent beam spans about one thread spacing.
+    previewUniforms.beamRatio.value.set(s / 2 / ax, s / 2 / ay);
+  }
 
   function showStatus(): void {
     status.textContent = `${statusBase} · noise ${noiseMs.toFixed(0)} ms`;
@@ -196,7 +240,20 @@ async function start(): Promise<void> {
     const mips = bakeMomentMips(maps);
     const ms2 = performance.now() - t0 - ms;
     if (textures) for (const t of [textures.weave, textures.relief, textures.momentA, textures.momentB]) t.dispose();
-    textures = { ...makeTextures(maps), ...makeMomentTextures(mips), noise, noiseInstances: defaultWaveNoiseParams.instances };
+    let gaps = 0;
+    for (let i = 2; i < maps.relief.length; i += 4) gaps += maps.relief[i]!;
+    gapFraction = gaps / 255 / (maps.size * maps.size);
+    updateLight();
+    rebakeTwoLayer();
+    textures = {
+      ...makeTextures(maps),
+      ...makeMomentTextures(mips),
+      noise,
+      noiseInstances: defaultWaveNoiseParams.instances,
+      twoLayer: twoLayer!,
+      diffraction,
+      diffractionLut,
+    };
     aspect = maps.aspect;
     updateLight();
     rebuildMaterial();
@@ -220,6 +277,8 @@ async function start(): Promise<void> {
     previewUniforms.thickness.value = state.thickness;
     previewUniforms.specular.value = state.specular;
     previewUniforms.glint.value = state.glint;
+    previewUniforms.backlight.value = state.backlight;
+    updateGaps();
     previewUniforms.yarnsPerRepeat.value = yarnsPerRepeat;
     // The plane is square: a repeat `aspect` times wider than tall needs that many more repeats along v.
     previewUniforms.repeats.value.set(state.repeats, state.repeats * aspect);
@@ -243,6 +302,7 @@ async function start(): Promise<void> {
         state.knit = pattern.name as typeof state.knit;
       }
       setColor(knitPreset.color);
+      state.threadSpacing = Math.round(yarnDiameterUm(knitPreset.yarn) / (2 * state.yarnRadius));
     } else {
       const preset = wovenPresets.find((p) => p.id === id);
       if (!preset) return;
@@ -262,6 +322,7 @@ async function start(): Promise<void> {
         state.weave = 'plain';
       }
       setColor(preset.color);
+      state.threadSpacing = Math.round(yarnDiameterUm(preset.yarn) / Math.max(state.warpWidth, 0.2));
     }
     gui.controllersRecursive().forEach((c) => c.updateDisplay());
     showFolders();
@@ -322,14 +383,26 @@ async function start(): Promise<void> {
   const viewFolder = gui.addFolder('Preview');
   viewFolder.add(state, 'view', views).name('Show').onChange(rebuildMaterial);
   viewFolder.add(state, 'repeats', 1, 64, 1).name('Repeats on plane').onChange(updateLight);
-  viewFolder.addColor(state, 'color').name('Color').onChange(updateLight);
+  viewFolder
+    .addColor(state, 'color')
+    .name('Color')
+    .onChange(() => {
+      updateLight();
+      rebakeTwoLayer();
+    });
   viewFolder.add(state, 'roughness', 0.05, 1, 0.01).name('Fiber roughness (SGGX)').onChange(updateLight);
   viewFolder.add(state, 'thickness', 0.1, 10, 0.1).name('Optical thickness (SGGX)').onChange(updateLight);
   viewFolder.add(state, 'specular', 0, 3, 0.01).name('Specular strength (SGGX)').onChange(updateLight);
   viewFolder.add(state, 'glint', 0, 1, 0.01).name('Glint (wave noise)').onChange(updateLight);
   viewFolder.add(state, 'shininess', 4, 512, 1).name('Sharpness (unfiltered)').onChange(updateLight);
   viewFolder.add(state, 'lightAzimuth', -180, 180, 1).name('Light azimuth').onChange(updateLight);
-  viewFolder.add(state, 'lightElevation', 5, 90, 1).name('Light elevation').onChange(updateLight);
+  viewFolder.add(state, 'lightElevation', -90, 90, 1).name('Light elevation (< 0: behind)').onChange(updateLight);
+
+  const sheerFolder = gui.addFolder('Opacity and back light');
+  sheerFolder.add(state, 'backlight', 0, 10, 0.1).name('Back light intensity').onChange(updateLight);
+  sheerFolder.add(state, 'threadSpacing', 50, 2000, 10).name('Thread spacing (µm)').onChange(updateLight);
+  sheerFolder.add(state, 'yarnTau', 0.1, 6, 0.05).name('Yarn density').onChange(rebakeTwoLayer);
+  sheerFolder.add(state, 'backFraction', 0.05, 0.95, 0.01).name('Back-scatter fraction').onChange(rebakeTwoLayer);
 
   const noiseFolder = gui.addFolder('Wave noise');
   noiseFolder.add(state, 'noiseCorrelation', 0.75, 4, 0.05).name('Glint grain').onFinishChange(rebakeNoise);
