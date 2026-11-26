@@ -35,6 +35,7 @@ import {
   vec3,
 } from 'three/tsl';
 import type { FabricAsset } from '../asset/fabricFile.ts';
+import { defaultFiberParams, fitFiberAlbedo } from '../lut/yarnScattering.ts';
 import { WAVE_NOISE_MAX } from '../noise/waveNoise.ts';
 import { createFabricTextures, disposeFabricTextures, type FabricTextures } from './textures.ts';
 
@@ -110,6 +111,11 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
     specular: uniform(1),
     /** Wave-optics glint strength, 0..1. */
     glint: uniform(0.5),
+    /**
+     * Linear RGB weight of light that crosses a clear fiber and leaves toward the viewer (TT),
+     * which tints satin and silk highlights. Set from the fiber colour fitted to the cloth.
+     */
+    fiberTint: uniform(new Color(0, 0, 0)),
     /** Fiber index of refraction; sets the Fresnel reflectance of the specular lobe. */
     ior: uniform(1.55),
     /** 0 = opaque, 1 = see through the weave gaps. */
@@ -144,14 +150,23 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
       if (s.forwardVariance) this.fabric.forwardKappa.value = Math.min(1 / s.forwardVariance, 1000);
     }
     if (asset.yarn) this.fabric.ior.value = asset.yarn.ior;
+    if (s) {
+      // TT share heading back toward the viewer: entry and exit (1 - F0) squared, the fiber's
+      // clarity and colour, and the backward share of the TT azimuthal lobe (Zhu et al.).
+      const f0 = ((this.fabric.ior.value - 1) / (this.fabric.ior.value + 1)) ** 2;
+      const fiber = fitFiberAlbedo(s.albedo, { ...defaultFiberParams, ior: this.fabric.ior.value });
+      const w = (1 - f0) ** 2 * defaultFiberParams.clarity * (1 - defaultFiberParams.ttForward);
+      this.fabric.fiberTint.value.setRGB(fiber[0] * w, fiber[1] * w, fiber[2] * w);
+    }
     // Only sheer fabrics need blending.
     this.transparent = (s?.gapFraction ?? 0) > 0.02;
 
     this.nodes = this.buildNodes();
     this.colorNode = this.fabric.color;
-    this.opacityNode = mix(float(1), this.nodes.coverage, this.fabric.sheerness);
-    // Roughness only steers the environment's prefiltered radiance; fiber highlights are broad.
-    this.roughnessNode = float(0.55);
+    this.opacityNode = this.nodes.opacity;
+    // Roughness only picks the environment's prefiltered mip. Fiber lobes are much broader than
+    // a GGX lobe of the same roughness (flake normals spread around every fiber), so blur more.
+    this.roughnessNode = clamp(this.fabric.roughness.add(0.45), 0, 1);
   }
 
   private buildNodes() {
@@ -207,7 +222,17 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
     const yarnsPerPixel = length(fwidth(st)).mul(f.yarnsPerRepeat);
     const glintContrast = f.glint.div(max(yarnsPerPixel, 1));
 
-    return { st, toFabric, coverage, lobeInputs, occlusion: shade.y, yarnTangent, bent, nb, nn, layer, noiseOffset, glintContrast };
+    // Open weave gaps as seen from the viewer: they close at oblique angles, as the yarns'
+    // height hides them (the two-layer table's gap channel, relative to normal incidence).
+    const muV = clamp(toFabric(positionViewDirection).z.abs(), 0, 1);
+    const closing = texture(t.twoLayer, vec2(muV, 0.25)).w.div(max(texture(t.twoLayer, vec2(1, 0.25)).w, 1e-4));
+    const gapView = float(1).sub(coverage).mul(clamp(closing, 0, 1));
+    // Blending shows the background through sheer gaps (alpha = opacity); the colour must then be
+    // the yarn radiance scaled by the visible yarn share over alpha, or it is darkened twice.
+    const opacity = float(1).sub(gapView.mul(f.sheerness));
+    const weight = float(1).sub(gapView).div(max(opacity, 1e-3));
+
+    return { st, toFabric, coverage, opacity, weight, lobeInputs, occlusion: shade.y, yarnTangent, bent, nb, nn, layer, noiseOffset, glintContrast };
   }
 
   /** Speckle multipliers (mean 1) for the specular and diffuse parts; see bakeWaveNoise. */
@@ -232,10 +257,13 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
    * The SGGX layer reflects almost everything it intercepts, so the fiber surface's Fresnel
    * reflectance (about 5% for polymers and silk) scales it; the rest enters the fibers.
    */
-  specular(L: V3, V: V3, H: V3): F {
+  specular(L: V3, V: V3, H: V3): V3 {
     let sum: F = float(0);
     for (const { m, w } of this.nodes.lobeInputs) sum = sum.add(this.sggxLobe(m, L, V, H).mul(w));
-    return sum.mul(this.fresnel(clamp(dot(V, H), 0, 1))).mul(this.fabric.specular);
+    // Lobe weights sum to the texel's yarn coverage; renormalize, then weight like the diffuse.
+    sum = sum.div(max(this.nodes.coverage, 1e-3)).mul(this.nodes.weight);
+    const tint = this.fabric.fiberTint as unknown as V3;
+    return tint.add(this.fresnel(clamp(dot(V, H), 0, 1))).mul(sum).mul(this.fabric.specular);
   }
 
   /** Schlick Fresnel for the fiber's index of refraction. */
@@ -339,15 +367,19 @@ class FabricLightingModel extends LightingModel {
     const lobe = exp(kappa.mul(dot(V, L.negate()).sub(1))).mul(kappa.div(float(1).sub(exp(kappa.mul(-2))).mul(2 * Math.PI)));
     const spread = mix(float(1 / Math.PI), lobe, forward.w);
     const transmitted = forward.rgb.mul(mu).mul(spread).mul(back);
-    const diffracted = m.diffraction(V.add(L)).mul(twoLayerGain.w).mul(back);
+    // Gap light is seen through pixels that are mostly transparent; undo the blend's alpha.
+    const diffracted = m.diffraction(V.add(L)).mul(twoLayerGain.w).mul(back).div(max(n.opacity, 0.05));
 
-    out.directDiffuse.addAssign(color.mul(diffuse.add(transmitted).mul(glintDiffuse).mul(n.coverage)));
+    out.directDiffuse.addAssign(color.mul(diffuse.add(transmitted).mul(glintDiffuse).mul(n.weight)));
     out.directSpecular.addAssign(color.mul(glintSpecular.mul(specular).add(diffracted)));
   }
 
   override indirect(builder: NodeBuilder): void {
-    const { irradiance, radiance, reflectedLight } = builder.context as unknown as {
+    // `irradiance` holds ambient and hemisphere lights; the environment map's diffuse light
+    // arrives separately as `iblIrradiance` (three's PhysicalLightingModel reads both).
+    const { irradiance, iblIrradiance, radiance, reflectedLight } = builder.context as unknown as {
       irradiance: V3;
+      iblIrradiance: V3;
       radiance: V3;
       reflectedLight: Record<'indirectDiffuse' | 'indirectSpecular', V3>;
     };
@@ -356,8 +388,12 @@ class FabricLightingModel extends LightingModel {
     const f = m.fabric;
     // Hemispherical average gain: sample the two-layer table at mu = 2/3 (the cosine-weighted mean).
     const gain = texture(m.textures.twoLayer, vec2(2 / 3, 0.25)).rgb;
-    reflectedLight.indirectDiffuse.addAssign(irradiance.mul(f.color as unknown as V3).mul(gain).mul(n.occlusion).mul(n.coverage).mul(1 / Math.PI));
+    reflectedLight.indirectDiffuse.addAssign(irradiance.add(iblIrradiance).mul(f.color as unknown as V3).mul(gain).mul(n.occlusion).mul(n.weight).mul(1 / Math.PI));
+    // Environment specular: prefiltered radiance times the lobe's directional albedo (Fresnel and
+    // slab shadowing included), and the yarn occlusion. See bakeSpecularAlbedo.
     const V = n.toFabric(positionViewDirection);
-    reflectedLight.indirectSpecular.addAssign(radiance.mul(m.fresnel(clamp(V.z, 0, 1))).mul(f.specular).mul(n.coverage));
+    const albedoLut = texture(m.textures.specularAlbedo, vec2(clamp(V.z, 0, 1), f.roughness));
+    const albedo = (f.fiberTint as unknown as V3).mul(albedoLut.y).add(albedoLut.x);
+    reflectedLight.indirectSpecular.addAssign(radiance.mul(albedo).mul(f.specular).mul(n.occlusion).mul(n.weight));
   }
 }

@@ -13,6 +13,7 @@ import {
 import { packHalf } from '../asset/half.ts';
 import type { FabricAsset } from '../asset/fabricFile.ts';
 import { bakeDiffractionLut, type DiffractionLut } from '../lut/diffraction.ts';
+import { bakeSpecularAlbedo } from '../lut/specularAlbedo.ts';
 
 /** GPU textures for one fabric. Create with {@link createFabricTextures}, free with {@link disposeFabricTextures}. */
 export interface FabricTextures {
@@ -29,6 +30,8 @@ export interface FabricTextures {
   twoLayer: DataTexture;
   noise: DataArrayTexture;
   noiseInstances: number;
+  /** Directional albedo of the specular lobe over (cos theta_v, roughness), for environment light. */
+  specularAlbedo: DataTexture;
   diffraction: DataTexture;
   diffractionLut: Pick<DiffractionLut, 'uMax' | 'rMin' | 'rMax'>;
 }
@@ -122,6 +125,15 @@ export function createFabricTextures(asset: FabricAsset): FabricTextures {
   noise.generateMipmaps = false;
   noise.needsUpdate = true;
   const diffraction = diffractionTexture();
+  const mean = asset.moments[asset.moments.length - 1]!;
+  const albedo = bakeSpecularAlbedo([mean.a[0]!, mean.a[1]!, 1 - mean.a[0]! - mean.a[1]!, mean.a[2]!, mean.b[0]!, mean.b[1]!], {
+    ior: asset.yarn?.ior ?? 1.55,
+  });
+  const albedoRgba = new Float32Array(albedo.data.length * 4);
+  for (let i = 0; i < albedo.data.length; i++) {
+    albedoRgba[i * 4] = albedo.data[i]!;
+    albedoRgba[i * 4 + 1] = albedo.bare[i]!;
+  }
   return {
     weave,
     relief,
@@ -140,6 +152,7 @@ export function createFabricTextures(asset: FabricAsset): FabricTextures {
     twoLayer: halfTexture(asset.twoLayer.data, asset.twoLayer.samples, 2),
     noise,
     noiseInstances: asset.noise.instances,
+    specularAlbedo: halfTexture(albedoRgba, albedo.muSamples, albedo.alphaSamples),
     diffraction: diffraction.texture,
     diffractionLut: diffraction.lut,
   };
@@ -147,6 +160,6 @@ export function createFabricTextures(asset: FabricAsset): FabricTextures {
 
 /** Frees one fabric's textures; the shared diffraction table stays. */
 export function disposeFabricTextures(t: FabricTextures): void {
-  for (const tex of [t.weave, t.relief, t.shade, t.momentA, t.momentB, t.twoLayer, t.noise]) tex.dispose();
+  for (const tex of [t.weave, t.relief, t.shade, t.momentA, t.momentB, t.twoLayer, t.noise, t.specularAlbedo]) tex.dispose();
   if (t.lobes) for (const tex of [t.lobes.a, t.lobes.b, t.lobes.c]) tex.dispose();
 }
