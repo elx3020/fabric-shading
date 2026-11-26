@@ -117,6 +117,8 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
     yarnsPerRepeat: uniform(4),
     gapHalfWidth: uniform(new Vector2(50, 50)),
     beamRatio: uniform(new Vector2(2, 2)),
+    /** Concentration of the forward glow around a light seen through the yarn (1 / variance). */
+    forwardKappa: uniform(4),
   };
 
   /** Shared per-pixel nodes the lighting model reads. */
@@ -139,6 +141,7 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
       this.fabric.yarnsPerRepeat.value = s.yarnsPerRepeat;
       this.fabric.gapHalfWidth.value.set(...s.gapHalfWidthUm);
       this.fabric.beamRatio.value.set(...s.beamRatio);
+      if (s.forwardVariance) this.fabric.forwardKappa.value = Math.min(1 / s.forwardVariance, 1000);
     }
     if (asset.yarn) this.fabric.ior.value = asset.yarn.ior;
     // Only sheer fabrics need blending.
@@ -329,8 +332,13 @@ class FabricLightingModel extends LightingModel {
     // Front: Lambert-like body reflection scaled by the inter-layer bounces, and fiber specular.
     const diffuse = albedo.mul(twoLayerGain.rgb).mul(n.occlusion).mul(mu.mul(1 / Math.PI)).mul(front);
     const specular = m.specular(L, V, H).mul(front);
-    // Back: diffuse transmission through the yarn, and diffraction through the open gaps.
-    const transmitted = forward.rgb.mul(mu.mul(1 / Math.PI)).mul(back);
+    // Back: transmission through the yarn, split into light that kept close to straight
+    // through (a von Mises-Fisher lobe around -L, Zhu et al.'s forward yarn lobe) and light
+    // scattered into a diffuse glow; plus diffraction through the open gaps.
+    const kappa = f.forwardKappa;
+    const lobe = exp(kappa.mul(dot(V, L.negate()).sub(1))).mul(kappa.div(float(1).sub(exp(kappa.mul(-2))).mul(2 * Math.PI)));
+    const spread = mix(float(1 / Math.PI), lobe, forward.w);
+    const transmitted = forward.rgb.mul(mu).mul(spread).mul(back);
     const diffracted = m.diffraction(V.add(L)).mul(twoLayerGain.w).mul(back);
 
     out.directDiffuse.addAssign(color.mul(diffuse.add(transmitted).mul(glintDiffuse).mul(n.coverage)));

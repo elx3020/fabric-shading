@@ -34,6 +34,11 @@ export interface FabricShading {
   gapFraction: number;
   /** Rows (picks or courses) in one repeat. */
   rows: number;
+  /**
+   * Angular variance (radians squared) of light that crosses the yarn near straight through,
+   * from the yarn scattering model. Absent in files from before it existed.
+   */
+  forwardVariance?: number;
 }
 
 export interface FabricAsset {
