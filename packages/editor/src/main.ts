@@ -23,6 +23,7 @@ import {
   type WeaveParams,
   type WeavePattern,
 } from '@fabric-shading/core';
+import { createFpsCounter } from './fps.ts';
 import { makeMomentTextures, makeNoiseTexture, makePreviewMaterial, makeTextures, previewUniforms, views, type PreviewTextures, type View } from './preview.ts';
 
 const status = document.getElementById('status')!;
@@ -343,9 +344,11 @@ async function start(): Promise<void> {
 
   applyPreset(state.preset);
 
+  const fps = createFpsCounter(document.getElementById('fps')!);
   renderer.setAnimationLoop(() => {
     controls.update();
     renderer.render(scene, camera);
+    fps.tick();
   });
 }
 
