@@ -51,3 +51,5 @@ export {
   type DiffractionLut,
   type DiffractionLutParams,
 } from './lut/diffraction.ts';
+export { decodeFabric, encodeFabric, FABRIC_FILE_VERSION, readFabric, writeFabric, type FabricAsset } from './asset/fabricFile.ts';
+export { fromHalf, packHalf, toHalf, unpackHalf } from './asset/half.ts';
