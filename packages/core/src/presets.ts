@@ -1,3 +1,4 @@
+import { garterKnit, jerseyKnit, ribKnit, type KnitParams, type KnitPattern } from './patterns/knit.ts';
 import { plainWeave, satinWeave, twillWeave, type WeaveParams, type WeavePattern } from './patterns/weave.ts';
 
 /** Fiber and yarn data measured by Yu et al. 2025 (supplemental), used by the shading model later. */
@@ -80,5 +81,51 @@ export const wovenPresets: readonly WovenPreset[] = [
     params: { warpWidth: 1, weftWidth: 1, crimp: 0.5, flatness: 0.75, irregularity: 0.5 },
     yarn: { plies: 3, fibersPerPly: [38, 42], plyDiameterUm: 140, fiberDiameterUm: 15, twistPitchUm: 3000, ior: 1.55 },
     color: [0.42, 0.42, 0.42],
+  },
+];
+
+export interface KnitPreset {
+  id: string;
+  label: string;
+  pattern: () => KnitPattern;
+  params: Partial<KnitParams>;
+  /** Approximate yarn data; not measured, for the shading model's starting point. */
+  yarn: YarnData;
+  color: [number, number, number];
+}
+
+/** Knit presets are visual estimates; no measured knit samples are available yet. */
+export const knitPresets: readonly KnitPreset[] = [
+  {
+    id: 'cotton-jersey',
+    label: 'Cotton jersey (T-shirt)',
+    pattern: () => jerseyKnit(true),
+    params: { stitchAspect: 1.3, yarnRadius: 0.22, relief: 0.6, irregularity: 0.2 },
+    yarn: { plies: 2, fibersPerPly: [40, 60], plyDiameterUm: 90, fiberDiameterUm: 12, twistPitchUm: 1500, ior: 1.53 },
+    color: [0.85, 0.85, 0.83],
+  },
+  {
+    id: 'wool-rib',
+    label: 'Wool 2x2 rib',
+    pattern: () => ribKnit(2, 2),
+    params: { stitchAspect: 1.1, yarnRadius: 0.25, relief: 0.8, irregularity: 0.35 },
+    yarn: { plies: 2, fibersPerPly: [60, 80], plyDiameterUm: 250, fiberDiameterUm: 20, twistPitchUm: 4000, ior: 1.55 },
+    color: [0.45, 0.12, 0.14],
+  },
+  {
+    id: 'chunky-garter',
+    label: 'Chunky wool garter',
+    pattern: () => garterKnit(),
+    params: { stitchAspect: 1.4, yarnRadius: 0.28, relief: 0.9, irregularity: 0.45 },
+    yarn: { plies: 3, fibersPerPly: [80, 100], plyDiameterUm: 600, fiberDiameterUm: 22, twistPitchUm: 8000, ior: 1.55 },
+    color: [0.78, 0.72, 0.62],
+  },
+  {
+    id: 'sports-knit',
+    label: 'Polyester-elastane sports knit',
+    pattern: () => jerseyKnit(true),
+    params: { stitchAspect: 1.25, yarnRadius: 0.2, relief: 0.5, irregularity: 0.1 },
+    yarn: { plies: 1, fibersPerPly: [30, 40], plyDiameterUm: 70, fiberDiameterUm: 10, twistPitchUm: 10000, ior: 1.57 },
+    color: [0.1, 0.22, 0.45],
   },
 ];

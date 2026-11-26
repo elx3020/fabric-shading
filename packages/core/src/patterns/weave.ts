@@ -82,6 +82,8 @@ export const YarnKind = {
   None: 0,
   Warp: 1,
   Weft: 2,
+  /** A knitted loop; every course is its own yarn pass. */
+  Loop: 3,
 } as const;
 export type YarnKind = (typeof YarnKind)[keyof typeof YarnKind];
 
@@ -94,7 +96,7 @@ export interface WeaveSample {
   h: number;
   /** Along-yarn position as a fraction of the repeat, 0..1. */
   z: number;
-  /** Yarn index within the repeat: warp column or weft row. */
+  /** Yarn index within the repeat: warp column, weft row, or knit course. */
   yarnId: number;
   /** Surface height in cell units (cell = 1). */
   height: number;

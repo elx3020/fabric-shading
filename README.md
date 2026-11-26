@@ -36,7 +36,7 @@ pnpm test       # unit tests
 pnpm typecheck
 ```
 
-Open the editor in a browser with WebGPU (Chrome, or Safari 26+). Pick a preset or a weave, adjust the yarn sliders, and switch the preview between the lit view and the individual baked channels.
+Open the editor in a browser with WebGPU (Chrome, or Safari 26+). Pick a preset, or a weave or knit stitch, adjust the sliders, and switch the preview between the lit view and the individual baked channels.
 
 ## Layout
 
