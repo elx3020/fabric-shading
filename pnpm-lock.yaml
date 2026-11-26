@@ -15,7 +15,36 @@ importers:
         specifier: 5.1.0
         version: 5.1.0(vite@8.3.8)
 
-  packages/core: {}
+  examples/plane:
+    dependencies:
+      '@fabric-shading/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      lil-gui:
+        specifier: 0.21.0
+        version: 0.21.0
+      three:
+        specifier: 0.187.0
+        version: 0.187.0
+    devDependencies:
+      '@types/three':
+        specifier: 0.187.0
+        version: 0.187.0
+      '@vitejs/plugin-basic-ssl':
+        specifier: 2.3.0
+        version: 2.3.0(vite@8.3.8)
+      vite:
+        specifier: 8.3.8
+        version: 8.3.8
+
+  packages/core:
+    devDependencies:
+      '@types/three':
+        specifier: 0.187.0
+        version: 0.187.0
+      three:
+        specifier: 0.187.0
+        version: 0.187.0
 
   packages/editor:
     dependencies:
