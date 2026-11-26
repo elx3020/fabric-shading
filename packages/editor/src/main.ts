@@ -25,9 +25,24 @@ import { makeMomentTextures, makePreviewMaterial, makeTextures, previewUniforms,
 
 const status = document.getElementById('status')!;
 
+/** Returns null when WebGPU is usable, otherwise a short reason for the unsupported page. */
+async function webgpuProblem(): Promise<string | null> {
+  if (!window.isSecureContext) return 'The page is not a secure context (needs https or localhost).';
+  if (!('gpu' in navigator)) return 'navigator.gpu is missing: this browser does not expose WebGPU here.';
+  try {
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) return 'navigator.gpu exists but requestAdapter() returned null: the GPU or driver is blocked, or WebGPU is disabled in the browser.';
+  } catch (error) {
+    return `requestAdapter() threw: ${String(error)}`;
+  }
+  return null;
+}
+
 async function start(): Promise<void> {
-  if (!('gpu' in navigator) || !(await navigator.gpu.requestAdapter())) {
+  const problem = await webgpuProblem();
+  if (problem) {
     if (!window.isSecureContext) document.getElementById('insecure')!.hidden = false;
+    document.getElementById('reason')!.textContent = `Reason: ${problem} (${navigator.userAgent})`;
     document.getElementById('unsupported')!.style.display = 'block';
     status.style.display = 'none';
     return;
