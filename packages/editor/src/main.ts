@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
   bakeKnitMaps,
   bakeMomentMips,
+  bakeTwoLobeMips,
   bakeDiffractionLut,
   bakeTwoLayerLut,
   bakeWaveNoise,
@@ -24,6 +25,7 @@ import {
   wovenPresets,
   type KnitPattern,
   type MomentLevel,
+  type TwoLobeLevel,
   type TwoLayerLut,
   type WaveNoiseTiles,
   type YarnData,
@@ -32,7 +34,7 @@ import {
   type WeavePattern,
 } from '@fabric-shading/core';
 import { createFpsCounter } from './fps.ts';
-import { makeDiffractionTexture, makeMomentTextures, makeNoiseTexture, makePreviewMaterial, makeTwoLayerTexture, makeTextures, previewUniforms, views, type PreviewTextures, type View } from './preview.ts';
+import { makeDiffractionTexture, makeMomentTextures, makeTwoLobeTextures, makeNoiseTexture, makePreviewMaterial, makeTwoLayerTexture, makeTextures, previewUniforms, views, type PreviewTextures, type View } from './preview.ts';
 
 const status = document.getElementById('status')!;
 
@@ -119,7 +121,7 @@ async function start(): Promise<void> {
   let statusBase = '';
 
   /** What the last bake (or import) produced; this is what Export writes. */
-  let baked: { name: string; maps: WeaveMaps; moments: MomentLevel[] } | undefined;
+  let baked: { name: string; maps: WeaveMaps; moments: MomentLevel[]; twoLobes: TwoLobeLevel[] } | undefined;
   let noiseTiles: WaveNoiseTiles;
   let twoLayerLut: TwoLayerLut;
 
@@ -252,14 +254,15 @@ async function start(): Promise<void> {
     }
     const ms = performance.now() - t0;
     const mips = bakeMomentMips(maps);
+    const lobes = bakeTwoLobeMips(maps);
     const ms2 = performance.now() - t0 - ms;
-    install(name, maps, mips, `${name} · ${maps.size}² texels · maps ${ms.toFixed(0)} ms · specular mips ${ms2.toFixed(0)} ms`);
+    install(name, maps, mips, lobes, `${name} · ${maps.size}² texels · maps ${ms.toFixed(0)} ms · specular mips ${ms2.toFixed(0)} ms`);
   }
 
   /** Uploads baked maps; uses `lut` as the two-layer table if given, otherwise rebakes it. */
-  function install(name: string, maps: WeaveMaps, mips: MomentLevel[], statusText: string, lut?: TwoLayerLut): void {
-    baked = { name, maps, moments: mips };
-    if (textures) for (const t of [textures.weave, textures.relief, textures.momentA, textures.momentB]) t.dispose();
+  function install(name: string, maps: WeaveMaps, mips: MomentLevel[], lobes: TwoLobeLevel[], statusText: string, lut?: TwoLayerLut): void {
+    baked = { name, maps, moments: mips, twoLobes: lobes };
+    if (textures) for (const t of [textures.weave, textures.relief, textures.momentA, textures.momentB, textures.lobeA, textures.lobeB, textures.lobeC]) t.dispose();
     let gaps = 0;
     for (let i = 2; i < maps.relief.length; i += 4) gaps += maps.relief[i]!;
     gapFraction = gaps / 255 / (maps.size * maps.size);
@@ -269,6 +272,7 @@ async function start(): Promise<void> {
     textures = {
       ...makeTextures(maps),
       ...makeMomentTextures(mips),
+      ...makeTwoLobeTextures(lobes),
       noise,
       noiseInstances: defaultWaveNoiseParams.instances,
       twoLayer: twoLayer!,
@@ -289,6 +293,7 @@ async function start(): Promise<void> {
       settings: { ...state, yarnsPerRepeat },
       maps: baked.maps,
       moments: baked.moments,
+      twoLobes: baked.twoLobes,
       twoLayer: twoLayerLut,
       noise: noiseTiles,
     });
@@ -321,7 +326,7 @@ async function start(): Promise<void> {
       noiseMs = 0;
       gui.controllersRecursive().forEach((c) => c.updateDisplay());
       showFolders();
-      install(asset.name, asset.maps, asset.moments, `${asset.name} · ${asset.maps.size}² texels · imported from ${file.name}`, asset.twoLayer);
+      install(asset.name, asset.maps, asset.moments, asset.twoLobes ?? bakeTwoLobeMips(asset.maps), `${asset.name} · ${asset.maps.size}² texels · imported from ${file.name}`, asset.twoLayer);
     } catch (e) {
       status.textContent = `Import failed: ${(e as Error).message}`;
     }

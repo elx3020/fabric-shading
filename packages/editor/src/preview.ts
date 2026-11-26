@@ -1,9 +1,9 @@
 import { Color, DataArrayTexture, DataTexture, DataUtils, HalfFloatType, LinearFilter, LinearMipmapLinearFilter, MeshBasicNodeMaterial, NearestFilter, RepeatWrapping, RGBAFormat, UnsignedByteType, Vector2, Vector3 } from 'three/webgpu';
 import { abs, asin, atan, cameraPosition, clamp, cross, dot, exp, float, floor, fract, fwidth, int, length, log, max, mix, smoothstep, step, normalize, positionWorld, pow, select, sin, sqrt, texture, uniform, uv, vec2, vec3 } from 'three/tsl';
 import type { Node } from 'three/webgpu';
-import { WAVE_NOISE_MAX, type DiffractionLut, type MomentLevel, type TwoLayerLut, type WaveNoiseTiles, type WeaveMaps } from '@fabric-shading/core';
+import { WAVE_NOISE_MAX, type DiffractionLut, type MomentLevel, type TwoLayerLut, type TwoLobeLevel, type WaveNoiseTiles, type WeaveMaps } from '@fabric-shading/core';
 
-export const views = ['lit (SGGX, filtered)', 'lit (unfiltered)', 'tangent', 'across h', 'along z', 'height', 'occlusion', 'gap', 'yarn id', 'noise tiles'] as const;
+export const views = ['lit (SGGX, filtered)', 'lit (SGGX, 2 lobes)', 'lit (unfiltered)', 'tangent', 'across h', 'along z', 'height', 'occlusion', 'gap', 'yarn id', 'noise tiles'] as const;
 export type View = (typeof views)[number];
 
 /** Uniforms the GUI drives without rebuilding the material. */
@@ -38,6 +38,9 @@ export interface PreviewTextures {
   relief: DataTexture;
   momentA: DataTexture;
   momentB: DataTexture;
+  lobeA: DataTexture;
+  lobeB: DataTexture;
+  lobeC: DataTexture;
   noise: DataArrayTexture;
   twoLayer: DataTexture;
   diffraction: DataTexture;
@@ -110,6 +113,15 @@ function halfTexture(levels: { size: number; data: Float32Array }[]): DataTextur
   t.generateMipmaps = false;
   t.needsUpdate = true;
   return t;
+}
+
+/** Quality-tier two-lobe mips as three half-float textures. */
+export function makeTwoLobeTextures(levels: TwoLobeLevel[]): { lobeA: DataTexture; lobeB: DataTexture; lobeC: DataTexture } {
+  return {
+    lobeA: halfTexture(levels.map((l) => ({ size: l.size, data: l.a }))),
+    lobeB: halfTexture(levels.map((l) => ({ size: l.size, data: l.b }))),
+    lobeC: halfTexture(levels.map((l) => ({ size: l.size, data: l.c }))),
+  };
 }
 
 /** Moment mips as two half-float textures with an explicit mip chain. */
@@ -196,7 +208,10 @@ export function makePreviewMaterial(textures: PreviewTextures, view: View): Mesh
       break;
     }
     case 'lit (SGGX, filtered)':
-      color = sggxLit(textures, st);
+      color = sggxLit(textures, st, false);
+      break;
+    case 'lit (SGGX, 2 lobes)':
+      color = sggxLit(textures, st, true);
       break;
     default: {
       // Plane faces +z, fabric u along x and v along y, so fabric space = world space here.
@@ -234,14 +249,23 @@ function quad(xx: Node<'float'>, yy: Node<'float'>, zz: Node<'float'>, xy: Node<
  * moment M, so the filtered highlight stays stable at one sample per pixel. Jin et al. specular
  * with a Lambert diffuse; the full fabric material (internal lobes, noise, transmission) is step 3.
  */
-function sggxLit(textures: PreviewTextures, st: Node<'vec2'>): Node<'vec3'> {
-  const a = texture(textures.momentA, st);
-  const b = texture(textures.momentB, st);
-  const r = texture(textures.relief, st);
-  const coverage = a.w;
+/**
+ * One SGGX fiber lobe (Jin et al.) from a coverage-normalised tangent moment:
+ * S = I - (1 - alpha^2) M, D from the inverse of S, the optical-thickness G term.
+ * Returns D G / (4 co); the caller multiplies by coverage, strength and cos(theta_i) via the 1/ci cancellation.
+ */
+function sggxLobe(
+  mxx: Node<'float'>,
+  myy: Node<'float'>,
+  mxy: Node<'float'>,
+  mxz: Node<'float'>,
+  myz: Node<'float'>,
+  L: Node<'vec3'>,
+  V: Node<'vec3'>,
+  H: Node<'vec3'>,
+): Node<'float'> {
   const k = float(1).sub(previewUniforms.roughness.mul(previewUniforms.roughness));
-  // S = I - k M; Mzz follows from trace(M) = 1.
-  const mxx = a.x, myy = a.y, mxy = a.z, mxz = b.x, myz = b.y;
+  // Mzz follows from trace(M) = 1.
   const mzz = float(1).sub(mxx).sub(myy);
   const sxx = float(1).sub(k.mul(mxx));
   const syy = float(1).sub(k.mul(myy));
@@ -258,9 +282,6 @@ function sggxLit(textures: PreviewTextures, st: Node<'vec2'>): Node<'vec3'> {
   const ixz = sxy.mul(syz).sub(sxz.mul(syy)).div(det);
   const iyz = sxy.mul(sxz).sub(sxx.mul(syz)).div(det);
 
-  const L = normalize(previewUniforms.lightDir);
-  const V = normalize(cameraPosition.sub(positionWorld));
-  const H = normalize(L.add(V));
   const ci = max(L.z, 1e-4);
   const co = max(V.z, 1e-4);
   const q = quad(ixx, iyy, izz, ixy, ixz, iyz, H);
@@ -270,8 +291,31 @@ function sggxLit(textures: PreviewTextures, st: Node<'vec2'>): Node<'vec3'> {
   const lsum = li.add(lo);
   const G = float(1).sub(exp(previewUniforms.thickness.negate().mul(lsum))).div(lsum);
   // Radiance = f * cos(theta_i); the cos cancels one of the 4 ci co.
+  return D.mul(G).div(co.mul(4));
+}
+
+function sggxLit(textures: PreviewTextures, st: Node<'vec2'>, twoLobes: boolean): Node<'vec3'> {
+  const r = texture(textures.relief, st);
+  const L = normalize(previewUniforms.lightDir);
+  const V = normalize(cameraPosition.sub(positionWorld));
+  const H = normalize(L.add(V));
+  let coverage: Node<'float'>;
+  let lobes: Node<'float'>;
+  if (twoLobes) {
+    // Quality tier: warp and weft (or the two knit legs) keep separate lobes under the footprint.
+    const a = texture(textures.lobeA, st);
+    const b = texture(textures.lobeB, st);
+    const c = texture(textures.lobeC, st);
+    coverage = a.w.add(c.w);
+    lobes = sggxLobe(a.x, a.y, a.z, b.x, b.y, L, V, H).mul(a.w).add(sggxLobe(c.x, c.y, c.z, b.z, b.w, L, V, H).mul(c.w));
+  } else {
+    const a = texture(textures.momentA, st);
+    const b = texture(textures.momentB, st);
+    coverage = a.w;
+    lobes = sggxLobe(a.x, a.y, a.z, b.x, b.y, L, V, H).mul(coverage);
+  }
   const front = step(0, L.z);
-  const spec = D.mul(G).div(co.mul(4)).mul(previewUniforms.specular).mul(coverage).mul(front);
+  const spec = lobes.mul(previewUniforms.specular).mul(front);
   // Two-layer gain: light bouncing between warp and weft brightens the reflection.
   const mu = abs(L.z);
   const layerRow = texture(textures.twoLayer, vec2(mu, 0.25));

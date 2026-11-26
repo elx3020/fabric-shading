@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { bakeTwoLayerLut } from '../lut/twoLayer.ts';
 import { bakeWaveNoise } from '../noise/waveNoise.ts';
 import { bakeWeaveMaps } from '../patterns/bake.ts';
-import { bakeMomentMips } from '../patterns/moments.ts';
+import { bakeMomentMips, bakeTwoLobeMips } from '../patterns/moments.ts';
 import { defaultWeaveParams, twillWeave } from '../patterns/weave.ts';
 import { decodeFabric, encodeFabric, readFabric, writeFabric, type FabricAsset } from './fabricFile.ts';
 import { fromHalf, toHalf } from './half.ts';
@@ -14,6 +14,7 @@ function sampleAsset(): FabricAsset {
     settings: { weave: 'twill', color: '#336699', nested: { a: [1, 2] } },
     maps,
     moments: bakeMomentMips(maps),
+    twoLobes: bakeTwoLobeMips(maps),
     twoLayer: bakeTwoLayerLut({ gapFraction: 0.05 }),
     noise: bakeWaveNoise({ size: 16, instances: 2 }),
   };
@@ -47,9 +48,17 @@ describe('fabric file', () => {
       expectClose(m.a, back.moments[i]!.a);
       expectClose(m.b, back.moments[i]!.b);
     });
+    asset.twoLobes!.forEach((m, i) => {
+      for (const k of ['a', 'b', 'c'] as const) expectClose(m[k], back.twoLobes![i]![k]);
+    });
     expectClose(asset.twoLayer.data, back.twoLayer.data);
     expect(back.noise.data).toEqual(asset.noise.data);
     expect(back.noise.layers).toBe(4);
+  });
+
+  it('leaves the quality tier out when it is not given', () => {
+    const { twoLobes: _, ...rest } = sampleAsset();
+    expect(decodeFabric(encodeFabric(rest)).twoLobes).toBeUndefined();
   });
 
   it('compresses with gzip and reads both compressed and raw files', async () => {

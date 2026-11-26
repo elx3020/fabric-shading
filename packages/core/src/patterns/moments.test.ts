@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { bakeKnitMaps, bakeWeaveMaps } from './bake.ts';
 import { defaultKnitParams, jerseyKnit } from './knit.ts';
-import { bakeMomentMips } from './moments.ts';
+import { bakeMomentMips, bakeTwoLobeMips } from './moments.ts';
 import { defaultWeaveParams, plainWeave, satinWeave } from './weave.ts';
 
 describe('bakeMomentMips', () => {
@@ -51,5 +51,43 @@ describe('bakeMomentMips', () => {
     expect(knit.at(-1)!.size).toBe(1);
     const odd = bakeWeaveMaps(plainWeave(), defaultWeaveParams, { size: 48, aoStrength: 0 });
     expect(() => bakeMomentMips(odd)).toThrow(RangeError);
+  });
+});
+
+describe('bakeTwoLobeMips', () => {
+  const maps = bakeWeaveMaps(plainWeave(), { ...defaultWeaveParams, irregularity: 0 }, { size: 64, aoStrength: 0 });
+  const one = bakeMomentMips(maps);
+  const two = bakeTwoLobeMips(maps);
+
+  it('separates warp (along v) from weft (along u) even where one lobe would average them', () => {
+    const top = two.at(-1)!;
+    // Crimp tilts tangents out of plane, so the in-plane share is below 1.
+    expect(top.a[1]!).toBeGreaterThan(5 * top.a[0]!); // warp: along v
+    expect(top.c[0]!).toBeGreaterThan(5 * top.c[1]!); // weft: along u
+    expect(one.at(-1)!.a[0]!).toBeLessThan(0.6); // the single lobe is a blur of both
+  });
+
+  it('splits coverage and recombines to exactly the single-lobe moment', () => {
+    for (let l = 0; l < one.length; l++) {
+      const s = one[l]!;
+      const d = two[l]!;
+      for (let i = 0; i < s.size * s.size; i++) {
+        const c0 = d.a[i * 4 + 3]!;
+        const c1 = d.c[i * 4 + 3]!;
+        expect(c0 + c1).toBeCloseTo(s.a[i * 4 + 3]!, 5);
+        if (c0 + c1 === 0) continue;
+        const mix = (k: number) => (d.a[i * 4 + k]! * c0 + d.c[i * 4 + k]! * c1) / (c0 + c1);
+        for (const k of [0, 1, 2]) expect(mix(k)).toBeCloseTo(s.a[i * 4 + k]!, 4);
+        expect((d.b[i * 4]! * c0 + d.b[i * 4 + 2]! * c1) / (c0 + c1)).toBeCloseTo(s.b[i * 4]!, 4);
+      }
+    }
+  });
+
+  it('splits a knit into its two leaning legs', () => {
+    const knit = bakeTwoLobeMips(bakeKnitMaps(jerseyKnit(), defaultKnitParams, { size: 64, aoStrength: 0 })).at(-1)!;
+    expect(knit.a[3]!).toBeGreaterThan(0.2);
+    expect(knit.c[3]!).toBeGreaterThan(0.2);
+    // Opposite lean: the off-diagonal Mxy has opposite signs.
+    expect(Math.sign(knit.a[2]!)).toBe(-Math.sign(knit.c[2]!));
   });
 });

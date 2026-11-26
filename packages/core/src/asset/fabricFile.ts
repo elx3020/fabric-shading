@@ -1,7 +1,7 @@
 import type { TwoLayerLut } from '../lut/twoLayer.ts';
 import type { WaveNoiseTiles } from '../noise/waveNoise.ts';
 import type { WeaveMaps } from '../patterns/bake.ts';
-import type { MomentLevel } from '../patterns/moments.ts';
+import type { MomentLevel, TwoLobeLevel } from '../patterns/moments.ts';
 import { packHalf, unpackHalf } from './half.ts';
 
 /**
@@ -22,6 +22,8 @@ export interface FabricAsset {
   settings: Record<string, unknown>;
   maps: WeaveMaps;
   moments: MomentLevel[];
+  /** Quality-tier specular; optional because the default tier does not need it. */
+  twoLobes?: TwoLobeLevel[];
   twoLayer: TwoLayerLut;
   noise: WaveNoiseTiles;
 }
@@ -43,6 +45,7 @@ interface Header {
   aspect: number;
   knitted: boolean;
   momentSizes: number[];
+  twoLobeSizes?: number[];
   twoLayerSamples: number;
   noise: { size: number; instances: number; layers: number };
   chunks: ChunkInfo[];
@@ -66,6 +69,11 @@ export function encodeFabric(asset: FabricAsset): Uint8Array {
     add(`moment.a.${i}`, level.a);
     add(`moment.b.${i}`, level.b);
   });
+  asset.twoLobes?.forEach((level, i) => {
+    add(`lobes.a.${i}`, level.a);
+    add(`lobes.b.${i}`, level.b);
+    add(`lobes.c.${i}`, level.c);
+  });
   add('twoLayer', asset.twoLayer.data);
   add('noise', asset.noise.data);
 
@@ -76,6 +84,7 @@ export function encodeFabric(asset: FabricAsset): Uint8Array {
     aspect: asset.maps.aspect,
     knitted: asset.maps.knitted,
     momentSizes: asset.moments.map((m) => m.size),
+    ...(asset.twoLobes ? { twoLobeSizes: asset.twoLobes.map((m) => m.size) } : {}),
     twoLayerSamples: asset.twoLayer.samples,
     noise: { size: asset.noise.size, instances: asset.noise.instances, layers: asset.noise.layers },
     chunks: parts.map((p) => p.info),
@@ -123,6 +132,9 @@ export function decodeFabric(bytes: Uint8Array): FabricAsset {
     settings: header.settings,
     maps: { size: header.size, aspect: header.aspect, knitted: header.knitted, weave: floats('weave'), relief: u8('relief') },
     moments: header.momentSizes.map((size, i) => ({ size, a: floats(`moment.a.${i}`), b: floats(`moment.b.${i}`) })),
+    ...(header.twoLobeSizes
+      ? { twoLobes: header.twoLobeSizes.map((size, i) => ({ size, a: floats(`lobes.a.${i}`), b: floats(`lobes.b.${i}`), c: floats(`lobes.c.${i}`) })) }
+      : {}),
     twoLayer: { samples: header.twoLayerSamples, data: floats('twoLayer') },
     noise: { ...header.noise, data: u8('noise') },
   };
