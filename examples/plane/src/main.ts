@@ -67,7 +67,7 @@ async function start(): Promise<void> {
     return;
   }
 
-  const renderer = new WebGPURenderer({ antialias: true });
+  const renderer = new WebGPURenderer({ antialias: true, trackTimestamp: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.outputColorSpace = SRGBColorSpace;
@@ -223,7 +223,9 @@ async function start(): Promise<void> {
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
-  const fps = createFpsCounter(document.getElementById('fps')!);
+  // GPU render time needs the "timestamp-query" feature; without it the label says "GPU n/a".
+  const gpuTiming = renderer.hasFeature('timestamp-query');
+  const fps = createFpsCounter(document.getElementById('fps')!, 500, gpuTiming);
   let time = 0;
   let last = performance.now();
   cloth.update(0);
@@ -236,6 +238,8 @@ async function start(): Promise<void> {
     last = now;
     controls.update();
     renderer.render(scene, camera);
+    // GPU render time from timestamp queries, where the browser exposes them ("timestamp-query").
+    if (gpuTiming) void renderer.resolveTimestampsAsync('render').then(fps.gpu);
     fps.tick();
   });
 }
