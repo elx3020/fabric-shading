@@ -17,6 +17,7 @@
     <div id="unsupported">
       <h1>WebGPU is not available</h1>
       <p>This editor needs a browser with WebGPU enabled, such as Chrome on Android or desktop, or Safari 26 and later. There is no WebGL fallback by design.</p>
+      <p id="reason" style="font-family: monospace; font-size: 0.85em; opacity: 0.8"></p>
       <p id="insecure" hidden><strong>This page was not loaded over https.</strong> Browsers only expose WebGPU on https pages or on localhost. On a phone, start the editor with <code>pnpm dev:phone</code> and open the https address it prints, then accept the certificate warning.</p>
     </div>
     <script type="module" src="/src/main.ts"></script>
