@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fabric editor</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #111; color: #ddd; font: 14px system-ui, sans-serif; overflow: hidden; }
+      #app { position: fixed; inset: 0; }
+      #status { position: fixed; left: 12px; bottom: 12px; padding: 6px 10px; background: #000a; border-radius: 6px; pointer-events: none; }
+      #unsupported { display: none; max-width: 32rem; margin: 20vh auto; padding: 0 16px; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="status"></div>
+    <div id="unsupported">
+      <h1>WebGPU is not available</h1>
+      <p>This editor needs a browser with WebGPU enabled, such as Chrome on Android or desktop, or Safari 26 and later. There is no WebGL fallback by design.</p>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

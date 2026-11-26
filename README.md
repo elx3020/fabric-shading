@@ -25,14 +25,27 @@ Everything heavy is baked once in the editor with WebGPU compute shaders. At run
 | Opacity and transmission | Two-layer reflection and transmission correction; separable weave-gap diffraction for back-lit sheer fabric | Yu et al. 2025 |
 | Glints and irregularity | Baked, spectrally shaped wave-optics noise tiles | Yu et al. 2025 |
 
-## Planned layout
+## Getting started
+
+Requires Node 22+ and pnpm 10.
+
+```sh
+pnpm install
+pnpm dev        # editor at http://localhost:5173 (also on your LAN for phone testing)
+pnpm test       # unit tests
+pnpm typecheck
+```
+
+Open the editor in a browser with WebGPU (Chrome, or Safari 26+). Pick a preset or a weave, adjust the yarn sliders, and switch the preview between the lit view and the individual baked channels.
+
+## Layout
 
 ```
 packages/
-  core/      the three.js fabric material (TSL) and asset loader
-  editor/    in-browser pattern editor and baker
-examples/    a cloth plane demo, front-lit and back-lit
-presets/     baked fabric presets (silk, cotton, wool, polyester, knits)
+  core/      pattern generation and baking; the TSL fabric material comes next
+  editor/    in-browser pattern editor and baker (Vite app)
+examples/    (planned) a cloth plane demo, front-lit and back-lit
+presets/     (planned) baked fabric presets
 ```
 
 ## Roadmap
