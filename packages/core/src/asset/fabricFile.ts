@@ -2,6 +2,7 @@ import type { TwoLayerLut } from '../lut/twoLayer.ts';
 import type { WaveNoiseTiles } from '../noise/waveNoise.ts';
 import type { WeaveMaps } from '../patterns/bake.ts';
 import type { MomentLevel, TwoLobeLevel } from '../patterns/moments.ts';
+import type { YarnData } from '../presets.ts';
 import { packHalf, unpackHalf } from './half.ts';
 
 /**
@@ -16,6 +17,25 @@ import { packHalf, unpackHalf } from './half.ts';
  * The header lists each chunk's offset (from the start of the chunk area), byte length and
  * element type. Float data is stored as half floats, which is what the GPU textures use anyway.
  */
+/** Physical inputs for the material that the maps alone don't carry. */
+export interface FabricShading {
+  /** Linear RGB albedo of the yarn. */
+  albedo: [number, number, number];
+  /** Yarns across one repeat (to estimate how many yarns a pixel covers). */
+  yarnsPerRepeat: number;
+  threadSpacingUm: number;
+  /** Half-widths of the gaps across the warp (x) and weft (y), micrometres. */
+  gapHalfWidthUm: [number, number];
+  /** Coherent beam width over gap half-width, per axis. */
+  beamRatio: [number, number];
+  /** Physical size of one repeat in u and v, micrometres. */
+  repeatSizeUm: [number, number];
+  /** Open area fraction at normal incidence. */
+  gapFraction: number;
+  /** Rows (picks or courses) in one repeat. */
+  rows: number;
+}
+
 export interface FabricAsset {
   name: string;
   /** Free-form editor state (pattern, sliders, colour); the material ignores it. */
@@ -26,6 +46,10 @@ export interface FabricAsset {
   twoLobes?: TwoLobeLevel[];
   twoLayer: TwoLayerLut;
   noise: WaveNoiseTiles;
+  /** Optional in files written before the material existed; see {@link FabricShading}. */
+  shading?: FabricShading;
+  /** Fiber and yarn data, when known (index of refraction, plies, fiber counts). */
+  yarn?: YarnData;
 }
 
 export const FABRIC_FILE_VERSION = 1;
@@ -48,6 +72,8 @@ interface Header {
   twoLobeSizes?: number[];
   twoLayerSamples: number;
   noise: { size: number; instances: number; layers: number };
+  shading?: FabricShading;
+  yarn?: YarnData;
   chunks: ChunkInfo[];
 }
 
@@ -87,6 +113,8 @@ export function encodeFabric(asset: FabricAsset): Uint8Array {
     ...(asset.twoLobes ? { twoLobeSizes: asset.twoLobes.map((m) => m.size) } : {}),
     twoLayerSamples: asset.twoLayer.samples,
     noise: { size: asset.noise.size, instances: asset.noise.instances, layers: asset.noise.layers },
+    ...(asset.shading ? { shading: asset.shading } : {}),
+    ...(asset.yarn ? { yarn: asset.yarn } : {}),
     chunks: parts.map((p) => p.info),
   };
   const json = new TextEncoder().encode(JSON.stringify(header));
@@ -137,6 +165,8 @@ export function decodeFabric(bytes: Uint8Array): FabricAsset {
       : {}),
     twoLayer: { samples: header.twoLayerSamples, data: floats('twoLayer') },
     noise: { ...header.noise, data: u8('noise') },
+    ...(header.shading ? { shading: header.shading } : {}),
+    ...(header.yarn ? { yarn: header.yarn } : {}),
   };
 }
 

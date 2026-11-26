@@ -1,0 +1,24 @@
+{
+  "name": "@fabric-shading/example-plane",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Animated cloth plane with the fabric material, environment lighting and a back light",
+  "scripts": {
+    "dev": "vite",
+    "dev:phone": "vite --mode phone",
+    "build": "tsc -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fabric-shading/core": "workspace:*",
+    "lil-gui": "0.21.0",
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "@types/three": "0.187.0",
+    "@vitejs/plugin-basic-ssl": "2.3.0",
+    "vite": "8.3.8"
+  }
+}

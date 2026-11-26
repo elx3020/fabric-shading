@@ -33,11 +33,23 @@ Requires Node 22+ and pnpm 10.
 pnpm install
 pnpm dev        # editor at http://localhost:5173
 pnpm dev:phone  # same editor over https, reachable from a phone on your LAN
+pnpm demo       # fabric material on a waving cloth plane at http://localhost:5174
+pnpm demo:phone # same demo over https for a phone or tablet
 pnpm test       # unit tests
 pnpm typecheck
 ```
 
 Open the editor in a browser with WebGPU (Chrome, or Safari 26+). Browsers only expose WebGPU on https pages or on localhost, so a phone opening the plain `http://<your-ip>:5173` address reports that WebGPU is unavailable. Use `pnpm dev:phone`, open the `https://<your-ip>:5173` address it prints, and accept the self-signed certificate warning once. On Android you can also forward the port over USB from `chrome://inspect` and open `http://localhost:5173` on the phone. Pick a preset, or a weave or knit stitch, adjust the sliders, and switch the preview between the lit view and the individual baked channels.
+
+The demo renders a baked fabric with `FabricMaterial` on an animated plane under an environment map and a directional light. Pick a preset or load a `.fabric` exported from the editor, switch between the default and quality tiers, and use **View against the light** to see light through the weave gaps and its diffraction.
+
+```ts
+import { fabricFromPreset } from '@fabric-shading/core';
+import { FabricMaterial } from '@fabric-shading/core/material';
+
+const material = new FabricMaterial(fabricFromPreset('silk-organza'), { repeats: 24 });
+mesh.material = material; // works with three.js lights and scene.environment, no mesh tangents needed
+```
 
 **File › Export .fabric** saves the baked fabric (maps, specular mips, noise tiles, opacity table and the editor settings) as one gzip-compressed file of a few hundred KB. **Import .fabric** opens it again without rebaking.
 
@@ -45,9 +57,10 @@ Open the editor in a browser with WebGPU (Chrome, or Safari 26+). Browsers only 
 
 ```
 packages/
-  core/      pattern generation and baking; the TSL fabric material comes next
+  core/      pattern generation, baking, and the TSL FabricMaterial (@fabric-shading/core/material)
   editor/    in-browser pattern editor and baker (Vite app)
-examples/    (planned) a cloth plane demo, front-lit and back-lit
+examples/
+  plane/     waving cloth plane demo, front-lit and back-lit
 presets/     (planned) baked fabric presets
 ```
 
