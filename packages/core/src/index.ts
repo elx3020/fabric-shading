@@ -13,5 +13,19 @@ export {
   type WeavePattern,
   type WeaveSample,
 } from './patterns/weave.ts';
-export { bakeWeaveMaps, decodeYarnId, defaultBakeOptions, type BakeOptions, type WeaveMaps } from './patterns/bake.ts';
+export { bakeKnitMaps, bakeWeaveMaps, decodeYarnId, defaultBakeOptions, type BakeOptions, type WeaveMaps } from './patterns/bake.ts';
+export {
+  defaultKnitParams,
+  garterKnit,
+  jerseyKnit,
+  knitAspect,
+  knitSampler,
+  maxKnitHeight,
+  ribKnit,
+  seedKnit,
+  type KnitParams,
+  type KnitPattern,
+  type Stitch,
+} from './patterns/knit.ts';
+export { knitPresets, type KnitPreset } from './presets.ts';
 export { wovenPresets, type WovenPreset, type YarnData } from './presets.ts';

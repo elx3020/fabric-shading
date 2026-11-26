@@ -1,4 +1,4 @@
-import { Color, DataTexture, DataUtils, HalfFloatType, LinearFilter, MeshBasicNodeMaterial, NearestFilter, RepeatWrapping, RGBAFormat, UnsignedByteType, Vector3 } from 'three/webgpu';
+import { Color, DataTexture, DataUtils, HalfFloatType, LinearFilter, MeshBasicNodeMaterial, NearestFilter, RepeatWrapping, RGBAFormat, UnsignedByteType, Vector2, Vector3 } from 'three/webgpu';
 import { abs, dot, float, fract, max, mix, normalize, pow, select, sin, sqrt, texture, uniform, uv, vec3 } from 'three/tsl';
 import type { Node } from 'three/webgpu';
 import type { WeaveMaps } from '@fabric-shading/core';
@@ -8,7 +8,8 @@ export type View = (typeof views)[number];
 
 /** Uniforms the GUI drives without rebuilding the material. */
 export const previewUniforms = {
-  repeats: uniform(8),
+  /** Repeats across the plane in u and v; v accounts for the repeat's aspect. */
+  repeats: uniform(new Vector2(8, 8)),
   lightDir: uniform(new Vector3(0.4, 0.5, 0.75)),
   color: uniform(new Color(0.8, 0.3, 0.15)),
   shininess: uniform(64),

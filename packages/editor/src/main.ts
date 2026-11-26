@@ -2,12 +2,21 @@ import GUI from 'lil-gui';
 import { Mesh, PerspectiveCamera, PlaneGeometry, Scene, SRGBColorSpace, WebGPURenderer, type DataTexture } from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
+  bakeKnitMaps,
   bakeWeaveMaps,
+  defaultKnitParams,
   defaultWeaveParams,
+  garterKnit,
+  jerseyKnit,
+  knitPresets,
   plainWeave,
+  ribKnit,
+  seedKnit,
   satinWeave,
   twillWeave,
   wovenPresets,
+  type KnitPattern,
+  type WeaveMaps,
   type WeaveParams,
   type WeavePattern,
 } from '@fabric-shading/core';
@@ -40,6 +49,13 @@ async function start(): Promise<void> {
 
   const state = {
     preset: wovenPresets[0]!.id,
+    fabric: 'woven' as 'woven' | 'knit',
+    knit: 'jersey' as 'jersey' | 'reverse jersey' | 'rib' | 'garter' | 'seed',
+    ribKnit: 2,
+    ribPurl: 2,
+    stitchAspect: defaultKnitParams.stitchAspect,
+    yarnRadius: defaultKnitParams.yarnRadius,
+    relief: defaultKnitParams.relief,
     weave: 'satin' as 'plain' | 'twill' | 'satin',
     twillOver: 2,
     twillUnder: 2,
@@ -58,6 +74,7 @@ async function start(): Promise<void> {
   };
 
   let textures: { weave: DataTexture; relief: DataTexture } | undefined;
+  let aspect = 1;
 
   function currentPattern(): WeavePattern {
     switch (state.weave) {
@@ -70,6 +87,21 @@ async function start(): Promise<void> {
     }
   }
 
+  function currentKnit(): KnitPattern {
+    switch (state.knit) {
+      case 'jersey':
+        return jerseyKnit(true);
+      case 'reverse jersey':
+        return jerseyKnit(false);
+      case 'rib':
+        return ribKnit(state.ribKnit, state.ribPurl);
+      case 'garter':
+        return garterKnit();
+      case 'seed':
+        return seedKnit();
+    }
+  }
+
   function rebuildMaterial(): void {
     if (!textures) return;
     const old = plane.material;
@@ -78,29 +110,44 @@ async function start(): Promise<void> {
   }
 
   function bake(): void {
-    let pattern: WeavePattern;
+    const options = { size: state.size, aoStrength: state.aoStrength };
+    let maps: WeaveMaps;
+    let name: string;
+    const t0 = performance.now();
     try {
-      pattern = currentPattern();
+      if (state.fabric === 'knit') {
+        const pattern = currentKnit();
+        name = pattern.name;
+        maps = bakeKnitMaps(
+          pattern,
+          { stitchAspect: state.stitchAspect, yarnRadius: state.yarnRadius, relief: state.relief, irregularity: state.irregularity, seed: state.seed },
+          options,
+        );
+      } else {
+        const pattern = currentPattern();
+        name = pattern.name;
+        const params: WeaveParams = {
+          warpWidth: state.warpWidth,
+          weftWidth: state.weftWidth,
+          crimp: state.crimp,
+          flatness: state.flatness,
+          irregularity: state.irregularity,
+          seed: state.seed,
+        };
+        maps = bakeWeaveMaps(pattern, params, options);
+      }
     } catch (e) {
       status.textContent = (e as Error).message;
       return;
     }
-    const params: WeaveParams = {
-      warpWidth: state.warpWidth,
-      weftWidth: state.weftWidth,
-      crimp: state.crimp,
-      flatness: state.flatness,
-      irregularity: state.irregularity,
-      seed: state.seed,
-    };
-    const t0 = performance.now();
-    const maps = bakeWeaveMaps(pattern, params, { size: state.size, aoStrength: state.aoStrength });
     const ms = performance.now() - t0;
     textures?.weave.dispose();
     textures?.relief.dispose();
     textures = makeTextures(maps);
+    aspect = maps.aspect;
+    updateLight();
     rebuildMaterial();
-    status.textContent = `${pattern.name} · ${maps.size}² texels · baked in ${ms.toFixed(1)} ms`;
+    status.textContent = `${name} · ${maps.size}² texels · baked in ${ms.toFixed(1)} ms`;
   }
 
   let pending = 0;
@@ -115,39 +162,66 @@ async function start(): Promise<void> {
     previewUniforms.lightDir.value.set(Math.cos(el) * Math.cos(az), Math.cos(el) * Math.sin(az), Math.sin(el));
     previewUniforms.color.value.set(state.color);
     previewUniforms.shininess.value = state.shininess;
-    previewUniforms.repeats.value = state.repeats;
+    // The plane is square: a repeat `aspect` times wider than tall needs that many more repeats along v.
+    previewUniforms.repeats.value.set(state.repeats, state.repeats * aspect);
+  }
+
+  function setColor(rgb: [number, number, number]): void {
+    state.color = `#${rgb.map((c) => Math.round(c * 255).toString(16).padStart(2, '0')).join('')}`;
   }
 
   function applyPreset(id: string): void {
-    const preset = wovenPresets.find((p) => p.id === id);
-    if (!preset) return;
-    const pattern = preset.pattern();
-    Object.assign(state, defaultWeaveParams, preset.params);
-    if (pattern.name.startsWith('satin')) {
-      state.weave = 'satin';
-      state.satinEnds = pattern.rows;
-      const step = pattern.warpUp[1]!.findIndex((up) => !up);
-      state.satinStep = step;
-      state.warpFaced = true;
-    } else if (pattern.name.startsWith('twill')) {
-      state.weave = 'twill';
-      state.twillOver = pattern.warpUp[0]!.filter(Boolean).length;
-      state.twillUnder = pattern.cols - state.twillOver;
+    const knitPreset = knitPresets.find((p) => p.id === id);
+    if (knitPreset) {
+      const pattern = knitPreset.pattern();
+      Object.assign(state, defaultKnitParams, knitPreset.params);
+      state.fabric = 'knit';
+      if (pattern.name.startsWith('rib')) {
+        state.knit = 'rib';
+        state.ribKnit = pattern.stitches[0]!.filter((s) => s === 'K').length;
+        state.ribPurl = pattern.cols - state.ribKnit;
+      } else {
+        state.knit = pattern.name as typeof state.knit;
+      }
+      setColor(knitPreset.color);
     } else {
-      state.weave = 'plain';
+      const preset = wovenPresets.find((p) => p.id === id);
+      if (!preset) return;
+      const pattern = preset.pattern();
+      Object.assign(state, defaultWeaveParams, preset.params);
+      state.fabric = 'woven';
+      if (pattern.name.startsWith('satin')) {
+        state.weave = 'satin';
+        state.satinEnds = pattern.rows;
+        state.satinStep = pattern.warpUp[1]!.findIndex((up) => !up);
+        state.warpFaced = true;
+      } else if (pattern.name.startsWith('twill')) {
+        state.weave = 'twill';
+        state.twillOver = pattern.warpUp[0]!.filter(Boolean).length;
+        state.twillUnder = pattern.cols - state.twillOver;
+      } else {
+        state.weave = 'plain';
+      }
+      setColor(preset.color);
     }
-    const [r, g, b] = preset.color;
-    state.color = `#${[r, g, b].map((c) => Math.round(c * 255).toString(16).padStart(2, '0')).join('')}`;
     gui.controllersRecursive().forEach((c) => c.updateDisplay());
+    showFolders();
     updateLight();
     scheduleBake();
   }
 
   const gui = new GUI({ title: 'Fabric editor' });
   gui
-    .add(state, 'preset', Object.fromEntries(wovenPresets.map((p) => [p.label, p.id])))
+    .add(state, 'preset', Object.fromEntries([...wovenPresets, ...knitPresets].map((p) => [p.label, p.id])))
     .name('Preset')
     .onChange(applyPreset);
+  gui
+    .add(state, 'fabric', ['woven', 'knit'])
+    .name('Fabric')
+    .onChange(() => {
+      showFolders();
+      scheduleBake();
+    });
 
   const weaveFolder = gui.addFolder('Weave');
   weaveFolder.add(state, 'weave', ['plain', 'twill', 'satin']).name('Type').onChange(scheduleBake);
@@ -157,13 +231,30 @@ async function start(): Promise<void> {
   weaveFolder.add(state, 'satinStep', 2, 10, 1).name('Satin step').onChange(scheduleBake);
   weaveFolder.add(state, 'warpFaced').name('Warp-faced').onChange(scheduleBake);
 
+  const knitFolder = gui.addFolder('Knit');
+  knitFolder.add(state, 'knit', ['jersey', 'reverse jersey', 'rib', 'garter', 'seed']).name('Stitch').onChange(scheduleBake);
+  knitFolder.add(state, 'ribKnit', 1, 4, 1).name('Rib knit wales').onChange(scheduleBake);
+  knitFolder.add(state, 'ribPurl', 1, 4, 1).name('Rib purl wales').onChange(scheduleBake);
+  knitFolder.add(state, 'stitchAspect', 0.8, 1.8, 0.01).name('Stitch width').onChange(scheduleBake);
+  knitFolder.add(state, 'yarnRadius', 0.12, 0.32, 0.005).name('Yarn thickness').onChange(scheduleBake);
+  knitFolder.add(state, 'relief', 0, 1, 0.01).name('Relief').onChange(scheduleBake);
+
   const yarnFolder = gui.addFolder('Yarn');
   yarnFolder.add(state, 'warpWidth', 0.2, 1, 0.01).name('Warp width').onChange(scheduleBake);
   yarnFolder.add(state, 'weftWidth', 0.2, 1, 0.01).name('Weft width').onChange(scheduleBake);
   yarnFolder.add(state, 'crimp', 0, 1, 0.01).name('Crimp').onChange(scheduleBake);
   yarnFolder.add(state, 'flatness', 0.2, 1, 0.01).name('Roundness').onChange(scheduleBake);
-  yarnFolder.add(state, 'irregularity', 0, 1, 0.01).name('Irregularity').onChange(scheduleBake);
-  yarnFolder.add(state, 'seed', 1, 999, 1).name('Seed').onChange(scheduleBake);
+
+  const variationFolder = gui.addFolder('Variation');
+  variationFolder.add(state, 'irregularity', 0, 1, 0.01).name('Irregularity').onChange(scheduleBake);
+  variationFolder.add(state, 'seed', 1, 999, 1).name('Seed').onChange(scheduleBake);
+
+  function showFolders(): void {
+    const knit = state.fabric === 'knit';
+    knitFolder.show(knit);
+    weaveFolder.show(!knit);
+    yarnFolder.show(!knit);
+  }
 
   const bakeFolder = gui.addFolder('Bake');
   bakeFolder.add(state, 'size', [64, 128, 256, 512, 1024]).name('Texels per repeat').onChange(scheduleBake);
@@ -184,7 +275,6 @@ async function start(): Promise<void> {
   });
 
   applyPreset(state.preset);
-  bake();
 
   renderer.setAnimationLoop(() => {
     controls.update();
