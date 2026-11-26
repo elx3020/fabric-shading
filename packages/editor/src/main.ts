@@ -27,6 +27,7 @@ const status = document.getElementById('status')!;
 
 async function start(): Promise<void> {
   if (!('gpu' in navigator) || !(await navigator.gpu.requestAdapter())) {
+    if (!window.isSecureContext) document.getElementById('insecure')!.hidden = false;
     document.getElementById('unsupported')!.style.display = 'block';
     status.style.display = 'none';
     return;

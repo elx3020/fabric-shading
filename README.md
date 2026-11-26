@@ -31,12 +31,13 @@ Requires Node 22+ and pnpm 10.
 
 ```sh
 pnpm install
-pnpm dev        # editor at http://localhost:5173 (also on your LAN for phone testing)
+pnpm dev        # editor at http://localhost:5173
+pnpm dev:phone  # same editor over https, reachable from a phone on your LAN
 pnpm test       # unit tests
 pnpm typecheck
 ```
 
-Open the editor in a browser with WebGPU (Chrome, or Safari 26+). Pick a preset, or a weave or knit stitch, adjust the sliders, and switch the preview between the lit view and the individual baked channels.
+Open the editor in a browser with WebGPU (Chrome, or Safari 26+). Browsers only expose WebGPU on https pages or on localhost, so a phone opening the plain `http://<your-ip>:5173` address reports that WebGPU is unavailable. Use `pnpm dev:phone`, open the `https://<your-ip>:5173` address it prints, and accept the self-signed certificate warning once. On Android you can also forward the port over USB from `chrome://inspect` and open `http://localhost:5173` on the phone. Pick a preset, or a weave or knit stitch, adjust the sliders, and switch the preview between the lit view and the individual baked channels.
 
 ## Layout
 

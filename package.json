@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "pnpm --filter @fabric-shading/editor dev",
+    "dev:phone": "pnpm --filter @fabric-shading/editor dev:phone",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
