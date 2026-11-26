@@ -79,14 +79,14 @@ async function start(): Promise<void> {
   scene.background = new Color(0x15161a);
   const pmrem = new PMREMGenerator(renderer);
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-  scene.environmentIntensity = 0.6;
+  scene.environmentIntensity = 0.5;
 
   const camera = new PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.01, 100);
   camera.position.set(0, -0.4, 2.4);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
 
-  const light = new DirectionalLight(0xffffff, 3);
+  const light = new DirectionalLight(0xffffff, 2);
   scene.add(light, light.target);
   // A small bright marker so the light's position (and the diffraction it causes) is easy to find.
   const marker = new Mesh(new SphereGeometry(0.03, 16, 8), new MeshBasicNodeMaterial({ color: 0xffffff }));
@@ -104,11 +104,11 @@ async function start(): Promise<void> {
     specular: 1,
     glint: 0.5,
     sheerness: 1,
-    environment: 0.6,
+    environment: 0.5,
     animate: true,
     waves: 0.06,
     lightBehind: false,
-    lightIntensity: 3,
+    lightIntensity: 2,
     lightAzimuth: 35,
     lightElevation: 45,
   };
