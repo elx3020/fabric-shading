@@ -1,8 +1,9 @@
 import GUI from 'lil-gui';
-import { Mesh, PerspectiveCamera, PlaneGeometry, Scene, SRGBColorSpace, WebGPURenderer, type DataTexture } from 'three/webgpu';
+import { Mesh, PerspectiveCamera, PlaneGeometry, Scene, SRGBColorSpace, WebGPURenderer } from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
   bakeKnitMaps,
+  bakeMomentMips,
   bakeWeaveMaps,
   defaultKnitParams,
   defaultWeaveParams,
@@ -20,7 +21,7 @@ import {
   type WeaveParams,
   type WeavePattern,
 } from '@fabric-shading/core';
-import { makePreviewMaterial, makeTextures, previewUniforms, views, type View } from './preview.ts';
+import { makeMomentTextures, makePreviewMaterial, makeTextures, previewUniforms, views, type PreviewTextures, type View } from './preview.ts';
 
 const status = document.getElementById('status')!;
 
@@ -64,7 +65,10 @@ async function start(): Promise<void> {
     warpFaced: true,
     size: 256,
     aoStrength: 0.6,
-    view: 'lit' as View,
+    view: 'lit (SGGX, filtered)' as View,
+    roughness: 0.35,
+    thickness: 2,
+    specular: 1,
     repeats: 8,
     lightAzimuth: 40,
     lightElevation: 50,
@@ -73,7 +77,7 @@ async function start(): Promise<void> {
     ...defaultWeaveParams,
   };
 
-  let textures: { weave: DataTexture; relief: DataTexture } | undefined;
+  let textures: PreviewTextures | undefined;
   let aspect = 1;
 
   function currentPattern(): WeavePattern {
@@ -141,13 +145,14 @@ async function start(): Promise<void> {
       return;
     }
     const ms = performance.now() - t0;
-    textures?.weave.dispose();
-    textures?.relief.dispose();
-    textures = makeTextures(maps);
+    const mips = bakeMomentMips(maps);
+    const ms2 = performance.now() - t0 - ms;
+    if (textures) for (const t of Object.values(textures)) t.dispose();
+    textures = { ...makeTextures(maps), ...makeMomentTextures(mips) };
     aspect = maps.aspect;
     updateLight();
     rebuildMaterial();
-    status.textContent = `${name} · ${maps.size}² texels · baked in ${ms.toFixed(1)} ms`;
+    status.textContent = `${name} · ${maps.size}² texels · maps ${ms.toFixed(0)} ms · specular mips ${ms2.toFixed(0)} ms`;
   }
 
   let pending = 0;
@@ -162,6 +167,9 @@ async function start(): Promise<void> {
     previewUniforms.lightDir.value.set(Math.cos(el) * Math.cos(az), Math.cos(el) * Math.sin(az), Math.sin(el));
     previewUniforms.color.value.set(state.color);
     previewUniforms.shininess.value = state.shininess;
+    previewUniforms.roughness.value = state.roughness;
+    previewUniforms.thickness.value = state.thickness;
+    previewUniforms.specular.value = state.specular;
     // The plane is square: a repeat `aspect` times wider than tall needs that many more repeats along v.
     previewUniforms.repeats.value.set(state.repeats, state.repeats * aspect);
   }
@@ -264,7 +272,10 @@ async function start(): Promise<void> {
   viewFolder.add(state, 'view', views).name('Show').onChange(rebuildMaterial);
   viewFolder.add(state, 'repeats', 1, 64, 1).name('Repeats on plane').onChange(updateLight);
   viewFolder.addColor(state, 'color').name('Color').onChange(updateLight);
-  viewFolder.add(state, 'shininess', 4, 512, 1).name('Highlight sharpness').onChange(updateLight);
+  viewFolder.add(state, 'roughness', 0.05, 1, 0.01).name('Fiber roughness (SGGX)').onChange(updateLight);
+  viewFolder.add(state, 'thickness', 0.1, 10, 0.1).name('Optical thickness (SGGX)').onChange(updateLight);
+  viewFolder.add(state, 'specular', 0, 3, 0.01).name('Specular strength (SGGX)').onChange(updateLight);
+  viewFolder.add(state, 'shininess', 4, 512, 1).name('Sharpness (unfiltered)').onChange(updateLight);
   viewFolder.add(state, 'lightAzimuth', -180, 180, 1).name('Light azimuth').onChange(updateLight);
   viewFolder.add(state, 'lightElevation', 5, 90, 1).name('Light elevation').onChange(updateLight);
 

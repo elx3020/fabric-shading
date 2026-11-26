@@ -29,3 +29,5 @@ export {
 } from './patterns/knit.ts';
 export { knitPresets, type KnitPreset } from './presets.ts';
 export { wovenPresets, type WovenPreset, type YarnData } from './presets.ts';
+export { bakeMomentMips, type MomentLevel } from './patterns/moments.ts';
+export { fiberSggx, sggxD, sggxSigma, sggxSpecular, tangentMoment, type Sym3 } from './shading/sggx.ts';
