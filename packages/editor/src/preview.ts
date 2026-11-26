@@ -1,9 +1,9 @@
-import { Color, DataTexture, DataUtils, HalfFloatType, LinearFilter, LinearMipmapLinearFilter, MeshBasicNodeMaterial, NearestFilter, RepeatWrapping, RGBAFormat, UnsignedByteType, Vector2, Vector3 } from 'three/webgpu';
-import { abs, cameraPosition, dot, exp, float, fract, max, mix, normalize, positionWorld, pow, select, sin, sqrt, texture, uniform, uv, vec3 } from 'three/tsl';
+import { Color, DataArrayTexture, DataTexture, DataUtils, HalfFloatType, LinearFilter, LinearMipmapLinearFilter, MeshBasicNodeMaterial, NearestFilter, RepeatWrapping, RGBAFormat, UnsignedByteType, Vector2, Vector3 } from 'three/webgpu';
+import { abs, asin, atan, cameraPosition, clamp, cross, dot, exp, float, floor, fract, fwidth, int, length, max, mix, normalize, positionWorld, pow, select, sin, sqrt, texture, uniform, uv, vec2, vec3 } from 'three/tsl';
 import type { Node } from 'three/webgpu';
-import type { MomentLevel, WeaveMaps } from '@fabric-shading/core';
+import { WAVE_NOISE_MAX, type MomentLevel, type WaveNoiseTiles, type WeaveMaps } from '@fabric-shading/core';
 
-export const views = ['lit (SGGX, filtered)', 'lit (unfiltered)', 'tangent', 'across h', 'along z', 'height', 'occlusion', 'gap', 'yarn id'] as const;
+export const views = ['lit (SGGX, filtered)', 'lit (unfiltered)', 'tangent', 'across h', 'along z', 'height', 'occlusion', 'gap', 'yarn id', 'noise tiles'] as const;
 export type View = (typeof views)[number];
 
 /** Uniforms the GUI drives without rebuilding the material. */
@@ -16,6 +16,10 @@ export const previewUniforms = {
   roughness: uniform(0.35),
   thickness: uniform(2),
   specular: uniform(1),
+  /** 0 = smooth lobes, 1 = full wave-optics speckle. */
+  glint: uniform(0.5),
+  /** Yarns across one repeat, to estimate how many plies a pixel covers. */
+  yarnsPerRepeat: uniform(4),
 };
 
 export interface PreviewTextures {
@@ -23,6 +27,36 @@ export interface PreviewTextures {
   relief: DataTexture;
   momentA: DataTexture;
   momentB: DataTexture;
+  noise: DataArrayTexture;
+  /** Instances per noise set; layers [0, n) reflection, [n, 2n) high-order. */
+  noiseInstances: number;
+}
+
+/** Noise tiles as an RGBA8 array texture; sampled by direction, so no mipmaps. */
+export function makeNoiseTexture(tiles: WaveNoiseTiles): DataArrayTexture {
+  const t = new DataArrayTexture(tiles.data, tiles.size, tiles.size, tiles.layers);
+  t.format = RGBAFormat;
+  t.type = UnsignedByteType;
+  t.wrapS = t.wrapT = RepeatWrapping;
+  t.magFilter = t.minFilter = LinearFilter;
+  t.generateMipmaps = false;
+  t.needsUpdate = true;
+  return t;
+}
+
+function decodeNoise(v: Node<'vec3'>): Node<'vec3'> {
+  return v.mul(v).mul(WAVE_NOISE_MAX);
+}
+
+function hash3(p: Node<'vec3'>): Node<'float'> {
+  return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))).mul(43758.5453));
+}
+
+/** Direction to noise-tile coordinates: u = azimuth around the yarn, v = longitudinal angle. */
+function fiberAngles(w: Node<'vec3'>, t: Node<'vec3'>, b: Node<'vec3'>, n: Node<'vec3'>): Node<'vec2'> {
+  const theta = asin(clamp(dot(w, t), -1, 1));
+  const phi = atan(dot(w, b), dot(w, n));
+  return vec2(phi.div(2 * Math.PI).add(0.5), theta.div(Math.PI).add(0.5));
 }
 
 function halfTexture(levels: { size: number; data: Float32Array }[]): DataTexture {
@@ -117,6 +151,14 @@ export function makePreviewMaterial(textures: PreviewTextures, view: View): Mesh
       color = mix(hashColor(packed.add(1)), backdrop, gap);
       break;
     }
+    case 'noise tiles': {
+      // Left half: reflection set, right half: high-order set; one instance per repeat.
+      const cell = floor(st);
+      const set = floor(uv().x.mul(2)).mul(textures.noiseInstances);
+      const layer = int(set.add(floor(hash3(vec3(cell, 0)).mul(textures.noiseInstances))));
+      color = decodeNoise(texture(textures.noise, fract(st)).depth(layer).rgb).mul(0.35);
+      break;
+    }
     case 'lit (SGGX, filtered)':
       color = sggxLit(textures, st);
       break;
@@ -194,6 +236,51 @@ function sggxLit(textures: PreviewTextures, st: Node<'vec2'>): Node<'vec3'> {
   // Radiance = f * cos(theta_i); the cos cancels one of the 4 ci co.
   const spec = D.mul(G).div(co.mul(4)).mul(previewUniforms.specular).mul(coverage);
   const diffuse = previewUniforms.color.mul(max(L.z, 0).mul(0.75).add(0.25)).mul(r.y);
+  const [glintSpec, glintDiffuse] = waveNoise(textures, st, H, V);
   const backdrop = vec3(0.05);
-  return mix(backdrop, diffuse.add(spec), coverage);
+  return mix(backdrop, diffuse.mul(glintDiffuse).add(glintSpec.mul(spec)), coverage);
+}
+
+/**
+ * Wave-optics noise multipliers (mean 1) for the specular and the internal/diffuse part.
+ * One noise instance per yarn segment. The reflection set is read at the direction whose
+ * half vector with normal incidence equals H (the memory effect: the speckle moves with the
+ * highlight instead of being fixed to the view); the high-order set is read at V. As the
+ * pixel footprint covers more yarns the speckle averages out, so its contrast falls as
+ * 1 / yarns per pixel and distant cloth doesn't sparkle.
+ */
+/** Plies across a yarn and noise segments along one yarn period, for instance hashing. */
+const PLIES = 3;
+const SEGMENTS = 6;
+
+function waveNoise(textures: PreviewTextures, st: Node<'vec2'>, H: Node<'vec3'>, V: Node<'vec3'>): [Node<'vec3'>, Node<'vec3'>] {
+  const w = texture(textures.weave, st);
+  const r = texture(textures.relief, st);
+  const t = octDecode(w.xy);
+  // The round cross-section turns the local normal across the yarn, so the azimuth (and the
+  // speckle) varies across each ply instead of being constant over a flat plane.
+  const across = w.z.mul(2).sub(1);
+  const side = normalize(vec3(t.y.negate(), t.x, 0));
+  const up = normalize(vec3(0, 0, 1).mul(sqrt(max(float(1).sub(across.mul(across)), 0.05))).add(side.mul(across)));
+  const b = normalize(cross(up, t));
+  const n = cross(t, b);
+
+  // Instances change per ply and per short stretch of yarn, as the paper hashes per ply
+  // segment; whole yarn floats sharing one instance read as flat blocks of color.
+  const yarn = r.w.mul(255).round();
+  const ply = floor(w.z.mul(PLIES));
+  const segment = floor(w.w.mul(SEGMENTS));
+  const cell = floor(st);
+  const seed = vec3(yarn.add(cell.x.mul(97)), segment.add(cell.y.mul(57)), ply.add(1));
+  const instances = textures.noiseInstances;
+  const layer = floor(hash3(seed).mul(instances));
+  const offset = vec2(hash3(seed.add(3.1)), hash3(seed.add(7.7)));
+
+  const mirrored = H.mul(dot(H, n).mul(2)).sub(n);
+  const reflection = decodeNoise(texture(textures.noise, fiberAngles(mirrored, t, b, n).add(offset)).depth(int(layer)).rgb);
+  const highOrder = decodeNoise(texture(textures.noise, fiberAngles(V, t, b, n).add(offset)).depth(int(layer.add(instances))).rgb);
+
+  const yarnsPerPixel = length(fwidth(st)).mul(previewUniforms.yarnsPerRepeat);
+  const contrast = previewUniforms.glint.div(max(yarnsPerPixel, 1));
+  return [reflection.sub(1).mul(contrast).add(1), highOrder.sub(1).mul(contrast.mul(0.25)).add(1)];
 }

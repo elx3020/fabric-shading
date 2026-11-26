@@ -4,6 +4,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
   bakeKnitMaps,
   bakeMomentMips,
+  bakeWaveNoise,
+  defaultWaveNoiseParams,
   bakeWeaveMaps,
   defaultKnitParams,
   defaultWeaveParams,
@@ -21,7 +23,7 @@ import {
   type WeaveParams,
   type WeavePattern,
 } from '@fabric-shading/core';
-import { makeMomentTextures, makePreviewMaterial, makeTextures, previewUniforms, views, type PreviewTextures, type View } from './preview.ts';
+import { makeMomentTextures, makeNoiseTexture, makePreviewMaterial, makeTextures, previewUniforms, views, type PreviewTextures, type View } from './preview.ts';
 
 const status = document.getElementById('status')!;
 
@@ -85,6 +87,10 @@ async function start(): Promise<void> {
     roughness: 0.35,
     thickness: 2,
     specular: 1,
+    glint: 0.5,
+    noiseCorrelation: defaultWaveNoiseParams.correlation,
+    noiseHighOrder: defaultWaveNoiseParams.highOrderCorrelation,
+    noiseSeed: defaultWaveNoiseParams.seed,
     repeats: 8,
     lightAzimuth: 40,
     lightElevation: 50,
@@ -95,6 +101,29 @@ async function start(): Promise<void> {
 
   let textures: PreviewTextures | undefined;
   let aspect = 1;
+  let yarnsPerRepeat = 4;
+  let noiseMs = 0;
+  let statusBase = '';
+
+  function bakeNoise(): ReturnType<typeof makeNoiseTexture> {
+    const t0 = performance.now();
+    const tiles = bakeWaveNoise({ correlation: state.noiseCorrelation, highOrderCorrelation: state.noiseHighOrder, seed: state.noiseSeed });
+    noiseMs = performance.now() - t0;
+    return makeNoiseTexture(tiles);
+  }
+  let noise = bakeNoise();
+
+  function showStatus(): void {
+    status.textContent = `${statusBase} · noise ${noiseMs.toFixed(0)} ms`;
+  }
+
+  function rebakeNoise(): void {
+    noise.dispose();
+    noise = bakeNoise();
+    if (textures) textures.noise = noise;
+    rebuildMaterial();
+    showStatus();
+  }
 
   function currentPattern(): WeavePattern {
     switch (state.weave) {
@@ -138,6 +167,7 @@ async function start(): Promise<void> {
       if (state.fabric === 'knit') {
         const pattern = currentKnit();
         name = pattern.name;
+        yarnsPerRepeat = pattern.cols;
         maps = bakeKnitMaps(
           pattern,
           { stitchAspect: state.stitchAspect, yarnRadius: state.yarnRadius, relief: state.relief, irregularity: state.irregularity, seed: state.seed },
@@ -146,6 +176,7 @@ async function start(): Promise<void> {
       } else {
         const pattern = currentPattern();
         name = pattern.name;
+        yarnsPerRepeat = pattern.cols;
         const params: WeaveParams = {
           warpWidth: state.warpWidth,
           weftWidth: state.weftWidth,
@@ -163,12 +194,13 @@ async function start(): Promise<void> {
     const ms = performance.now() - t0;
     const mips = bakeMomentMips(maps);
     const ms2 = performance.now() - t0 - ms;
-    if (textures) for (const t of Object.values(textures)) t.dispose();
-    textures = { ...makeTextures(maps), ...makeMomentTextures(mips) };
+    if (textures) for (const t of [textures.weave, textures.relief, textures.momentA, textures.momentB]) t.dispose();
+    textures = { ...makeTextures(maps), ...makeMomentTextures(mips), noise, noiseInstances: defaultWaveNoiseParams.instances };
     aspect = maps.aspect;
     updateLight();
     rebuildMaterial();
-    status.textContent = `${name} · ${maps.size}² texels · maps ${ms.toFixed(0)} ms · specular mips ${ms2.toFixed(0)} ms`;
+    statusBase = `${name} · ${maps.size}² texels · maps ${ms.toFixed(0)} ms · specular mips ${ms2.toFixed(0)} ms`;
+    showStatus();
   }
 
   let pending = 0;
@@ -186,6 +218,8 @@ async function start(): Promise<void> {
     previewUniforms.roughness.value = state.roughness;
     previewUniforms.thickness.value = state.thickness;
     previewUniforms.specular.value = state.specular;
+    previewUniforms.glint.value = state.glint;
+    previewUniforms.yarnsPerRepeat.value = yarnsPerRepeat;
     // The plane is square: a repeat `aspect` times wider than tall needs that many more repeats along v.
     previewUniforms.repeats.value.set(state.repeats, state.repeats * aspect);
   }
@@ -291,9 +325,15 @@ async function start(): Promise<void> {
   viewFolder.add(state, 'roughness', 0.05, 1, 0.01).name('Fiber roughness (SGGX)').onChange(updateLight);
   viewFolder.add(state, 'thickness', 0.1, 10, 0.1).name('Optical thickness (SGGX)').onChange(updateLight);
   viewFolder.add(state, 'specular', 0, 3, 0.01).name('Specular strength (SGGX)').onChange(updateLight);
+  viewFolder.add(state, 'glint', 0, 1, 0.01).name('Glint (wave noise)').onChange(updateLight);
   viewFolder.add(state, 'shininess', 4, 512, 1).name('Sharpness (unfiltered)').onChange(updateLight);
   viewFolder.add(state, 'lightAzimuth', -180, 180, 1).name('Light azimuth').onChange(updateLight);
   viewFolder.add(state, 'lightElevation', 5, 90, 1).name('Light elevation').onChange(updateLight);
+
+  const noiseFolder = gui.addFolder('Wave noise');
+  noiseFolder.add(state, 'noiseCorrelation', 0.75, 4, 0.05).name('Glint grain').onFinishChange(rebakeNoise);
+  noiseFolder.add(state, 'noiseHighOrder', 1, 8, 0.1).name('Inner grain').onFinishChange(rebakeNoise);
+  noiseFolder.add(state, 'noiseSeed', 1, 999, 1).name('Seed').onFinishChange(rebakeNoise);
 
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
