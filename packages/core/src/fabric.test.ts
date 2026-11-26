@@ -46,3 +46,14 @@ describe('bakeFabric', () => {
     expect(yarnDiameterUm({ ...yarn, plies: 2 })).toBe(200);
   });
 });
+
+describe('yarn model in bakeFabric', () => {
+  it('records the forward lobe width when yarn data is known', () => {
+    const a = fabricFromPreset('silk-organza', { bake: { size: 32 }, noise: { size: 8, instances: 1 } });
+    expect(a.shading!.forwardVariance).toBeGreaterThan(0);
+    // White organza yarn passes some light on, but far less than its open gaps.
+    const forward = a.twoLayer.data[(a.twoLayer.samples + a.twoLayer.samples - 1) * 4]!;
+    expect(forward).toBeGreaterThan(0.005);
+    expect(forward).toBeLessThan(0.5);
+  });
+});

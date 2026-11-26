@@ -12,15 +12,18 @@
  * B_b, F_b are the same quantities averaged over the hemisphere, because light between the
  * layers is already scattered.
  *
- * Until the yarn lobes of step 3 exist, a layer is a slab of yarn with optical depth tau and
- * single-scattering albedo alpha: e^(-tau/mu) passes straight through, and the scattered rest
- * goes backward with probability beta. With alpha = 1 the slab conserves energy, and so does
- * the two-layer total. Step 3 replaces {@link layerAlbedo} with integrals of the real lobes;
- * the series and the table format stay.
+ * When the yarn's fiber data is known, a layer's albedos come from the yarn scattering model
+ * of Zhu et al. (see yarnScattering.ts). Otherwise a layer is a slab of yarn with optical depth
+ * tau and single-scattering albedo alpha: e^(-tau/mu) passes straight through, and the
+ * scattered rest goes backward with probability beta. With alpha = 1 the slab conserves
+ * energy, and so does the two-layer total.
  *
  * Open weave gaps are handled separately (they transmit light unscattered, and diffract it):
  * the gap fraction shrinks at oblique angles as the yarns' height closes the openings.
  */
+import type { YarnData } from '../presets.ts';
+import { yarnScattering, type FiberParams } from './yarnScattering.ts';
+
 export interface TwoLayerParams {
   /** Per-channel single-scattering albedo of the yarn, linear RGB. */
   albedo: readonly [number, number, number];
@@ -32,6 +35,8 @@ export interface TwoLayerParams {
   gapFraction: number;
   /** Yarn height over gap width; the gap closes when tan(theta) exceeds its inverse. */
   gapDepth: number;
+  /** Fiber-level yarn model; replaces the slab (albedo, tau, backFraction) when present. */
+  yarn?: { data: YarnData; fiber: FiberParams };
 }
 
 export const defaultTwoLayerParams: TwoLayerParams = {
@@ -44,19 +49,25 @@ export const defaultTwoLayerParams: TwoLayerParams = {
 
 export type Rgb = [number, number, number];
 
-/** Backward and forward albedo of one yarn layer for light arriving at cos(theta) = mu. */
-export function layerAlbedo(p: TwoLayerParams, mu: number): { B: Rgb; F: Rgb } {
+/**
+ * Backward and forward albedo of one yarn layer for light arriving at cos(theta) = mu, and the
+ * share of the forward light that still travels near straight through.
+ */
+export function layerAlbedo(p: TwoLayerParams, mu: number): { B: Rgb; F: Rgb; narrow: Rgb } {
+  if (p.yarn) return yarnScattering(p.yarn.data, p.yarn.fiber, mu);
   const direct = Math.exp(-p.tau / Math.max(mu, 1e-3));
   const scattered = 1 - direct;
   const B = p.albedo.map((a) => scattered * a * p.backFraction) as Rgb;
   const F = p.albedo.map((a) => direct + scattered * a * (1 - p.backFraction)) as Rgb;
-  return { B, F };
+  const narrow = F.map((f) => (f > 0 ? direct / f : 0)) as Rgb;
+  return { B, F, narrow };
 }
 
 /** Cosine-weighted hemispherical average of a layer's albedo. */
-export function hemisphericalAlbedo(p: TwoLayerParams, steps = 256): { B: Rgb; F: Rgb } {
+export function hemisphericalAlbedo(p: TwoLayerParams, steps = 256): { B: Rgb; F: Rgb; straight: Rgb } {
   const B: Rgb = [0, 0, 0];
   const F: Rgb = [0, 0, 0];
+  const straight: Rgb = [0, 0, 0];
   for (let i = 0; i < steps; i++) {
     const mu = (i + 0.5) / steps;
     const l = layerAlbedo(p, mu);
@@ -65,9 +76,10 @@ export function hemisphericalAlbedo(p: TwoLayerParams, steps = 256): { B: Rgb; F
     for (let c = 0; c < 3; c++) {
       B[c]! += l.B[c]! * w;
       F[c]! += l.F[c]! * w;
+      straight[c]! += l.F[c]! * l.narrow[c]! * w;
     }
   }
-  return { B, F };
+  return { B, F, straight };
 }
 
 /** Yarn-covered region: albedos with all bounces between the two layers. */
@@ -96,7 +108,8 @@ export interface TwoLayerLut {
   /**
    * RGBA float, two rows of `samples` texels.
    * Row 0: RGB = backward gain B_total / B_t (scales a single-layer reflection lobe), A = open gap fraction.
-   * Row 1: RGB = forward albedo F_total of the yarn region, A = luminance of B_total (for debugging).
+   * Row 1: RGB = forward albedo F_total of the yarn region, A = share of F_total that crossed both
+   * layers without scattering away from straight through (luminance-weighted).
    */
   data: Float32Array;
 }
@@ -114,7 +127,15 @@ export function bakeTwoLayerLut(params: Partial<TwoLayerParams> = {}, samples = 
       data[(samples + i) * 4 + c] = total.F[c]!;
     }
     data[i * 4 + 3] = gapAt(p, mu);
-    data[(samples + i) * 4 + 3] = 0.2126 * total.B[0] + 0.7152 * total.B[1] + 0.0722 * total.B[2];
+    // Straight through both layers: the narrow parts multiply; back-bounced light is scattered.
+    const w = [0.2126, 0.7152, 0.0722];
+    let straight = 0;
+    let all = 0;
+    for (let c = 0; c < 3; c++) {
+      straight += w[c]! * top.F[c]! * top.narrow[c]! * bottom.straight[c]!;
+      all += w[c]! * total.F[c]!;
+    }
+    data[(samples + i) * 4 + 3] = all > 1e-6 ? Math.min(straight / all, 1) : 0;
   }
   return { samples, data };
 }

@@ -1,5 +1,6 @@
 import type { FabricAsset, FabricShading } from './asset/fabricFile.ts';
 import { bakeTwoLayerLut } from './lut/twoLayer.ts';
+import { defaultFiberParams, fitFiberAlbedo, forwardVariance, type FiberParams } from './lut/yarnScattering.ts';
 import { bakeWaveNoise, type WaveNoiseParams } from './noise/waveNoise.ts';
 import { bakeKnitMaps, bakeWeaveMaps, type BakeOptions, defaultBakeOptions, type WeaveMaps } from './patterns/bake.ts';
 import { defaultKnitParams, type KnitParams, type KnitPattern } from './patterns/knit.ts';
@@ -22,6 +23,11 @@ export type FabricSpec = (
   yarnDensity?: number;
   /** Share of scattered light that leaves backward. */
   backFraction?: number;
+  /**
+   * Share of light entering a fiber that passes through unscattered (clear filament such as
+   * silk or polyester: about 0.85; delustered or staple cotton and wool: lower). Used with `yarn`.
+   */
+  fiberClarity?: number;
   /** Editor or app state to keep with the asset. */
   settings?: Record<string, unknown>;
 };
@@ -67,7 +73,15 @@ export function fabricShading(spec: FabricSpec, maps: WeaveMaps, threadSpacingUm
     repeatSizeUm: [cols * spacing, (cols * spacing) / maps.aspect],
     gapFraction: gapFractionOf(maps),
     rows,
+    ...(spec.yarn ? { forwardVariance: forwardVariance(spec.yarn, fiberParams(spec)) } : {}),
   };
+}
+
+/** Fiber parameters for the yarn scattering model, with the fiber colour fitted to the cloth colour. */
+export function fiberParams(spec: FabricSpec): FiberParams {
+  const color = spec.color ?? [0.8, 0.8, 0.8];
+  const base = { ...defaultFiberParams, ior: spec.yarn?.ior ?? defaultFiberParams.ior, clarity: spec.fiberClarity ?? defaultFiberParams.clarity };
+  return { ...base, albedo: fitFiberAlbedo([srgbToLinear(color[0]), srgbToLinear(color[1]), srgbToLinear(color[2])], base) };
 }
 
 /** Bakes everything a fabric material needs, in about 0.1 to 0.4 s on desktop. */
@@ -91,6 +105,7 @@ export function bakeFabric(spec: FabricSpec): FabricAsset {
       backFraction: spec.backFraction ?? 0.35,
       gapFraction: shading.gapFraction,
       gapDepth,
+      ...(spec.yarn ? { yarn: { data: spec.yarn, fiber: fiberParams(spec) } } : {}),
     }),
     noise: bakeWaveNoise(spec.noise),
     shading,
