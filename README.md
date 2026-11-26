@@ -39,6 +39,8 @@ pnpm typecheck
 
 Open the editor in a browser with WebGPU (Chrome, or Safari 26+). Browsers only expose WebGPU on https pages or on localhost, so a phone opening the plain `http://<your-ip>:5173` address reports that WebGPU is unavailable. Use `pnpm dev:phone`, open the `https://<your-ip>:5173` address it prints, and accept the self-signed certificate warning once. On Android you can also forward the port over USB from `chrome://inspect` and open `http://localhost:5173` on the phone. Pick a preset, or a weave or knit stitch, adjust the sliders, and switch the preview between the lit view and the individual baked channels.
 
+**File › Export .fabric** saves the baked fabric (maps, specular mips, noise tiles, opacity table and the editor settings) as one gzip-compressed file of a few hundred KB. **Import .fabric** opens it again without rebaking.
+
 ## Layout
 
 ```
