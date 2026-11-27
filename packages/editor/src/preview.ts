@@ -6,7 +6,7 @@ import { deriveYarnNormals, WAVE_NOISE_MAX, type WaveNoiseTiles, type WeaveMaps 
 /** Views drawn with the real FabricMaterial (main.ts); the rest are debug views of the baked maps. */
 export const materialViews = ['lit (default tier)', 'lit (quality tier, 2 lobes)'] as const;
 export const NOISE_VIEW = 'noise tiles (left: glint grain, right: inner grain)';
-export const views = [...materialViews, 'lit (unfiltered)', 'tangent', 'across h', 'along z', 'height', 'normals', 'occlusion', 'gap', 'yarn id', NOISE_VIEW] as const;
+export const views = [...materialViews, 'lit (unfiltered)', 'tangent', 'across h', 'along z', 'height', 'normals', 'horizon', 'occlusion', 'gap', 'yarn id', NOISE_VIEW] as const;
 export type View = (typeof views)[number];
 
 /** Uniforms the GUI drives without rebuilding the material. */
@@ -23,6 +23,7 @@ export interface PreviewTextures {
   weave: DataTexture;
   relief: DataTexture;
   normal: DataTexture;
+  horizon: DataTexture;
   noise: DataArrayTexture;
   /** Instances per noise set; layers [0, n) reflection, [n, 2n) high-order. */
   noiseInstances: number;
@@ -56,13 +57,14 @@ function hash3(p: Node<'vec3'>): Node<'float'> {
 
 
 
-export function makeTextures(maps: WeaveMaps): { weave: DataTexture; relief: DataTexture; normal: DataTexture } {
+export function makeTextures(maps: WeaveMaps): { weave: DataTexture; relief: DataTexture; normal: DataTexture; horizon: DataTexture } {
   const half = new Uint16Array(maps.weave.length);
   for (let i = 0; i < half.length; i++) half[i] = DataUtils.toHalfFloat(maps.weave[i]!);
   const weave = new DataTexture(half, maps.size, maps.size, RGBAFormat, HalfFloatType);
   const relief = new DataTexture(maps.relief, maps.size, maps.size, RGBAFormat, UnsignedByteType);
   const normal = new DataTexture(maps.normal ?? deriveYarnNormals(maps), maps.size, maps.size, RGBAFormat, UnsignedByteType);
-  for (const t of [weave, relief, normal]) {
+  const horizon = new DataTexture(maps.horizon ?? new Uint8Array(maps.size * maps.size * 4), maps.size, maps.size, RGBAFormat, UnsignedByteType);
+  for (const t of [weave, relief, normal, horizon]) {
     t.wrapS = t.wrapT = RepeatWrapping;
     // Tangents and ids must not be blended across yarn edges until the multi-scale tables exist.
     t.magFilter = NearestFilter;
@@ -71,7 +73,7 @@ export function makeTextures(maps: WeaveMaps): { weave: DataTexture; relief: Dat
     t.needsUpdate = true;
   }
   relief.magFilter = LinearFilter;
-  return { weave, relief, normal };
+  return { weave, relief, normal, horizon };
 }
 
 function octDecode(e: Node<'vec2'>): Node<'vec3'> {
@@ -117,6 +119,12 @@ export function makePreviewMaterial(textures: PreviewTextures, view: View): Mesh
       // The usual normal-map colours: x to red, y to green, up is blue.
       color = texture(textures.normal, st).rgb;
       break;
+    case 'horizon': {
+      // Red: horizon toward +u, green: toward +v, blue: the higher of -u and -v.
+      const hz = texture(textures.horizon, st);
+      color = vec3(hz.x, hz.z, max(hz.y, hz.w));
+      break;
+    }
     case 'occlusion':
       color = vec3(r.y);
       break;

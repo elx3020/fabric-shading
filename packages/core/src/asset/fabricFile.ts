@@ -99,6 +99,7 @@ export function encodeFabric(asset: FabricAsset): Uint8Array {
   add('weave', asset.maps.weave);
   add('relief', asset.maps.relief);
   if (asset.maps.normal) add('normal', asset.maps.normal);
+  if (asset.maps.horizon) add('horizon', asset.maps.horizon);
   asset.moments.forEach((level, i) => {
     add(`moment.a.${i}`, level.a);
     add(`moment.b.${i}`, level.b);
@@ -173,6 +174,7 @@ export function decodeFabric(bytes: Uint8Array): FabricAsset {
       weave: floats('weave'),
       relief: u8('relief'),
       ...(header.chunks.some((c) => c.id === 'normal') ? { normal: u8('normal') } : {}),
+      ...(header.chunks.some((c) => c.id === 'horizon') ? { horizon: u8('horizon') } : {}),
     },
     moments: header.momentSizes.map((size, i) => ({ size, a: floats(`moment.a.${i}`), b: floats(`moment.b.${i}`) })),
     ...(header.twoLobeSizes

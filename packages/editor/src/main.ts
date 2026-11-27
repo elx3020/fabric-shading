@@ -118,6 +118,7 @@ async function start(): Promise<void> {
     yarnNormal: 0.75,
     sheen: 0.3,
     sheenRoughness: 0.5,
+    selfShadow: 1,
     noiseCorrelation: defaultWaveNoiseParams.correlation,
     noiseHighOrder: defaultWaveNoiseParams.highOrderCorrelation,
     noiseSeed: defaultWaveNoiseParams.seed,
@@ -345,7 +346,7 @@ async function start(): Promise<void> {
   /** Uploads baked maps; uses `lut` as the two-layer table if given, otherwise rebakes it. */
   function install(name: string, maps: WeaveMaps, mips: MomentLevel[], lobes: TwoLobeLevel[], statusText: string, lut?: TwoLayerLut): void {
     baked = { name, maps, moments: mips, twoLobes: lobes };
-    if (textures) for (const t of [textures.weave, textures.relief, textures.normal]) t.dispose();
+    if (textures) for (const t of [textures.weave, textures.relief, textures.normal, textures.horizon]) t.dispose();
     let gaps = 0;
     for (let i = 2; i < maps.relief.length; i += 4) gaps += maps.relief[i]!;
     gapFraction = gaps / 255 / (maps.size * maps.size);
@@ -433,6 +434,7 @@ async function start(): Promise<void> {
       f.yarnNormal.value = state.yarnNormal;
       f.sheen.value = state.sheen;
       f.sheenRoughness.value = state.sheenRoughness;
+      f.selfShadow.value = state.selfShadow;
       f.lightSize.value = state.lightSize;
       updateGaps();
     }
@@ -551,6 +553,7 @@ async function start(): Promise<void> {
   viewFolder.add(state, 'yarnNormal', 0, 1, 0.01).name('Yarn normal shading').onChange(updateLight);
   viewFolder.add(state, 'sheen', 0, 1, 0.01).name('Sheen (fuzz)').onChange(updateLight);
   viewFolder.add(state, 'sheenRoughness', 0.01, 1, 0.01).name('Sheen roughness').onChange(updateLight);
+  viewFolder.add(state, 'selfShadow', 0, 1, 0.01).name('Yarn self-shadowing').onChange(updateLight);
   viewFolder.add(state, 'shininess', 4, 512, 1).name('Sharpness (unfiltered)').onChange(updateLight);
   viewFolder.add(state, 'lightAzimuth', -180, 180, 1).name('Light azimuth').onChange(updateLight);
   viewFolder.add(state, 'lightElevation', -90, 90, 1).name('Light elevation (< 0: behind)').onChange(updateLight);

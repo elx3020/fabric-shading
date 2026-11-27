@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bakeKnitMaps, bakeWeaveMaps, decodeYarnId, deriveYarnNormals } from './bake.ts';
+import { bakeKnitMaps, bakeWeaveMaps, decodeYarnId, deriveYarnNormals, horizonMap } from './bake.ts';
 import { defaultKnitParams, jerseyKnit } from './knit.ts';
 import { octDecode, octEncode, type Vec3 } from './octahedral.ts';
 import { defaultWeaveParams, plainWeave, satinWeave, YarnKind, yarnNormal } from './weave.ts';
@@ -103,5 +103,25 @@ describe('yarn normals', () => {
   it('are baked for knits too', () => {
     const maps = bakeKnitMaps(jerseyKnit(), defaultKnitParams, { size: 32, aoStrength: 0 });
     expect(maps.normal!.length).toBe(32 * 32 * 4);
+  });
+});
+
+describe('horizon map', () => {
+  it('is open on a flat field and rises toward a bump', () => {
+    const size = 16;
+    const flat = horizonMap(new Float32Array(size * size), size, [1, 1], [1, 1]);
+    expect(Math.max(...flat)).toBe(0);
+    const bump = new Float32Array(size * size);
+    bump[8 * size + 10] = 0.2;
+    const h = horizonMap(bump, size, [1, 1], [4, 4]); // search 4 texels, so the wrap stays out of reach
+    const at = (x: number, y: number, d: number) => h[(y * size + x) * 4 + d]!;
+    expect(at(8, 8, 0)).toBeGreaterThan(40); // toward +u the bump stands 2 texels away
+    expect(at(8, 8, 1)).toBeLessThan(at(8, 8, 0) / 4); // toward -u only the blur sees it
+  });
+
+  it('is baked with the weave maps', () => {
+    const maps = bakeWeaveMaps(plainWeave(), defaultWeaveParams, { size: 32, aoStrength: 0 });
+    expect(maps.horizon!.length).toBe(32 * 32 * 4);
+    expect(Math.max(...maps.horizon!)).toBeGreaterThan(0);
   });
 });
