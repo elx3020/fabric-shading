@@ -116,6 +116,8 @@ async function start(): Promise<void> {
     specular: 1,
     glint: 0.5,
     yarnNormal: 0.75,
+    sheen: 0.3,
+    sheenRoughness: 0.5,
     noiseCorrelation: defaultWaveNoiseParams.correlation,
     noiseHighOrder: defaultWaveNoiseParams.highOrderCorrelation,
     noiseSeed: defaultWaveNoiseParams.seed,
@@ -168,7 +170,7 @@ async function start(): Promise<void> {
 
   /** The editor's current pattern as a FabricSpec, with colour and the preset's yarn data. */
   function specFromState(): FabricSpec {
-    const common = { color: srgbColor(), ...(presetYarn ? { yarn: presetYarn } : {}) };
+    const common = { color: srgbColor(), sheen: { amount: state.sheen, roughness: state.sheenRoughness }, ...(presetYarn ? { yarn: presetYarn } : {}) };
     if (state.fabric === 'knit') {
       return {
         kind: 'knit',
@@ -188,7 +190,7 @@ async function start(): Promise<void> {
   /** Everything FabricMaterial needs, as Export writes it (including the shading and yarn blocks). */
   function currentAsset(): FabricAsset | undefined {
     if (!baked || !bakedSpec) return undefined;
-    const spec = { ...bakedSpec, color: srgbColor(), ...(presetYarn ? { yarn: presetYarn } : {}) };
+    const spec = { ...bakedSpec, color: srgbColor(), sheen: { amount: state.sheen, roughness: state.sheenRoughness }, ...(presetYarn ? { yarn: presetYarn } : {}) };
     return {
       name: baked.name,
       settings: { ...state, yarnsPerRepeat },
@@ -429,6 +431,8 @@ async function start(): Promise<void> {
       f.specular.value = state.specular;
       f.glint.value = state.glint;
       f.yarnNormal.value = state.yarnNormal;
+      f.sheen.value = state.sheen;
+      f.sheenRoughness.value = state.sheenRoughness;
       f.lightSize.value = state.lightSize;
       updateGaps();
     }
@@ -453,6 +457,8 @@ async function start(): Promise<void> {
       }
       setColor(knitPreset.color);
       presetYarn = knitPreset.yarn;
+      state.sheen = knitPreset.sheen.amount;
+      state.sheenRoughness = knitPreset.sheen.roughness;
       state.threadSpacing = Math.round(yarnDiameterUm(knitPreset.yarn) / (2 * state.yarnRadius));
     } else {
       const preset = wovenPresets.find((p) => p.id === id);
@@ -474,6 +480,8 @@ async function start(): Promise<void> {
       }
       setColor(preset.color);
       presetYarn = preset.yarn;
+      state.sheen = preset.sheen.amount;
+      state.sheenRoughness = preset.sheen.roughness;
       state.threadSpacing = Math.round(yarnDiameterUm(preset.yarn) / Math.max(state.warpWidth, 0.2));
     }
     gui.controllersRecursive().forEach((c) => c.updateDisplay());
@@ -541,6 +549,8 @@ async function start(): Promise<void> {
   viewFolder.add(state, 'specular', 0, 3, 0.01).name('Specular strength (SGGX)').onChange(updateLight);
   viewFolder.add(state, 'glint', 0, 1, 0.01).name('Glint (wave noise)').onChange(updateLight);
   viewFolder.add(state, 'yarnNormal', 0, 1, 0.01).name('Yarn normal shading').onChange(updateLight);
+  viewFolder.add(state, 'sheen', 0, 1, 0.01).name('Sheen (fuzz)').onChange(updateLight);
+  viewFolder.add(state, 'sheenRoughness', 0.01, 1, 0.01).name('Sheen roughness').onChange(updateLight);
   viewFolder.add(state, 'shininess', 4, 512, 1).name('Sharpness (unfiltered)').onChange(updateLight);
   viewFolder.add(state, 'lightAzimuth', -180, 180, 1).name('Light azimuth').onChange(updateLight);
   viewFolder.add(state, 'lightElevation', -90, 90, 1).name('Light elevation (< 0: behind)').onChange(updateLight);

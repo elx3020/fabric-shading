@@ -6,7 +6,7 @@ import { bakeKnitMaps, bakeWeaveMaps, type BakeOptions, defaultBakeOptions, type
 import { defaultKnitParams, type KnitParams, type KnitPattern } from './patterns/knit.ts';
 import { bakeMomentMips, bakeTwoLobeMips } from './patterns/moments.ts';
 import { defaultWeaveParams, type WeaveParams, type WeavePattern } from './patterns/weave.ts';
-import { knitPresets, wovenPresets, type YarnData } from './presets.ts';
+import { knitPresets, wovenPresets, type SheenParams, type YarnData } from './presets.ts';
 
 export type FabricSpec = (
   | { kind: 'woven'; pattern: WeavePattern; params?: Partial<WeaveParams> }
@@ -28,9 +28,13 @@ export type FabricSpec = (
    * silk or polyester: about 0.85; delustered or staple cotton and wool: lower). Used with `yarn`.
    */
   fiberClarity?: number;
+  /** Fly-away fiber sheen; staple fibers have more. Default: a little (amount 0.3, roughness 0.5). */
+  sheen?: SheenParams;
   /** Editor or app state to keep with the asset. */
   settings?: Record<string, unknown>;
 };
+
+export const defaultSheen: SheenParams = { amount: 0.3, roughness: 0.5 };
 
 export function srgbToLinear(c: number): number {
   return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
@@ -73,6 +77,7 @@ export function fabricShading(spec: FabricSpec, maps: WeaveMaps, threadSpacingUm
     repeatSizeUm: [cols * spacing, (cols * spacing) / maps.aspect],
     gapFraction: gapFractionOf(maps),
     rows,
+    sheen: { ...defaultSheen, ...spec.sheen },
     ...(spec.yarn ? { forwardVariance: forwardVariance(spec.yarn, fiberParams(spec)) } : {}),
   };
 }
@@ -119,11 +124,11 @@ export const fabricPresetIds: readonly string[] = [...wovenPresets, ...knitPrese
 export function fabricFromPreset(id: string, overrides: Partial<Pick<FabricSpec, 'bake' | 'noise' | 'color'>> = {}): FabricAsset {
   const woven = wovenPresets.find((p) => p.id === id);
   if (woven) {
-    return bakeFabric({ kind: 'woven', pattern: woven.pattern(), params: woven.params, color: woven.color, yarn: woven.yarn, name: woven.label, settings: { preset: id }, ...overrides });
+    return bakeFabric({ kind: 'woven', pattern: woven.pattern(), params: woven.params, color: woven.color, yarn: woven.yarn, sheen: woven.sheen, name: woven.label, settings: { preset: id }, ...overrides });
   }
   const knit = knitPresets.find((p) => p.id === id);
   if (knit) {
-    return bakeFabric({ kind: 'knit', pattern: knit.pattern(), params: knit.params, color: knit.color, yarn: knit.yarn, name: knit.label, settings: { preset: id }, ...overrides });
+    return bakeFabric({ kind: 'knit', pattern: knit.pattern(), params: knit.params, color: knit.color, yarn: knit.yarn, sheen: knit.sheen, name: knit.label, settings: { preset: id }, ...overrides });
   }
   throw new Error(`Unknown fabric preset "${id}"`);
 }

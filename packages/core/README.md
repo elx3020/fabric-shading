@@ -53,6 +53,7 @@ Live parameters are TSL uniforms on `material.fabric`, so changing `.value` need
 | `sheerness` | 0 is opaque; 1 lets light and background through the weave gaps. |
 | `ior` | Fiber index of refraction (Fresnel). Set from the yarn data when known. |
 | `yarnNormal` | Share of diffuse and transmitted light shaded with the yarn normal, 0 to 1. |
+| `sheen`, `sheenRoughness`, `sheenColor` | Fly-away fiber sheen layer: amount 0 to 1, lobe width, fiber colour. Set from the fabric (cotton and wool have more). |
 | `lightSize` | Angular radius of the lights in radians (three's lights are points); sets how bright the diffraction cross is. |
 
 What it models:
@@ -62,6 +63,7 @@ What it models:
 - Bounces between the warp and weft layers.
 - Light through the gaps, including the diffraction cross around a light seen through sheer cloth.
 - Environment light from behind the cloth, passed on through the yarn.
+- A sheen layer for fly-away fibers on top of the cloth (Zeltner et al. 2022, as used by Zhu et al. 2024).
 
 `material.dispose()` frees the fabric's textures. The diffraction table is shared by all materials and stays.
 
