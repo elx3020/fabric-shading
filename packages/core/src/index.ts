@@ -58,6 +58,7 @@ export {
   fabricFromPreset,
   fabricPresetIds,
   fabricShading,
+  fiberParams,
   gapFractionOf,
   srgbToLinear,
   yarnDiameterUm,

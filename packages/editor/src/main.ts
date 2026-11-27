@@ -1,11 +1,11 @@
 import GUI from 'lil-gui';
-import { Mesh, PerspectiveCamera, PlaneGeometry, Scene, SRGBColorSpace, WebGPURenderer } from 'three/webgpu';
+import { ACESFilmicToneMapping, Color, DirectionalLight, Mesh, PerspectiveCamera, PlaneGeometry, PMREMGenerator, Scene, SRGBColorSpace, WebGPURenderer } from 'three/webgpu';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
   bakeKnitMaps,
   bakeMomentMips,
   bakeTwoLobeMips,
-  bakeDiffractionLut,
   bakeTwoLayerLut,
   bakeWaveNoise,
   readFabric,
@@ -23,6 +23,10 @@ import {
   satinWeave,
   twillWeave,
   wovenPresets,
+  fabricShading,
+  fiberParams,
+  type FabricAsset,
+  type FabricSpec,
   type KnitPattern,
   type MomentLevel,
   type TwoLobeLevel,
@@ -33,8 +37,9 @@ import {
   type WeaveParams,
   type WeavePattern,
 } from '@fabric-shading/core';
+import { FabricMaterial } from '@fabric-shading/core/material';
 import { createFpsCounter } from './fps.ts';
-import { makeDiffractionTexture, makeMomentTextures, makeTwoLobeTextures, makeNoiseTexture, makePreviewMaterial, makeTwoLayerTexture, makeTextures, previewUniforms, views, type PreviewTextures, type View } from './preview.ts';
+import { makeNoiseTexture, makePreviewMaterial, makeTextures, materialViews, previewUniforms, views, type PreviewTextures, type View } from './preview.ts';
 
 const status = document.getElementById('status')!;
 
@@ -65,6 +70,7 @@ async function start(): Promise<void> {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.outputColorSpace = SRGBColorSpace;
+  renderer.toneMapping = ACESFilmicToneMapping;
   await renderer.init();
   document.getElementById('app')!.appendChild(renderer.domElement);
 
@@ -76,6 +82,14 @@ async function start(): Promise<void> {
 
   const plane = new Mesh(new PlaneGeometry(2, 2));
   scene.add(plane);
+
+  // The lit views use the real FabricMaterial under ordinary three.js lights: a key light
+  // (azimuth, elevation), a back light straight behind the cloth facing the camera (for
+  // transmission and the diffraction cross), and a room environment.
+  scene.environment = new PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+  const keyLight = new DirectionalLight(0xffffff, 2.5);
+  const backLight = new DirectionalLight(0xffffff, 0);
+  scene.add(keyLight, backLight);
 
   const state = {
     preset: wovenPresets[0]!.id,
@@ -94,7 +108,7 @@ async function start(): Promise<void> {
     warpFaced: true,
     size: 256,
     aoStrength: 0.6,
-    view: 'lit (SGGX, filtered)' as View,
+    view: materialViews[0] as View,
     roughness: 0.35,
     thickness: 2,
     specular: 1,
@@ -105,8 +119,11 @@ async function start(): Promise<void> {
     repeats: 8,
     lightAzimuth: 40,
     lightElevation: 50,
-    backlight: 1,
+    keyLight: 2.5,
+    environment: 0.4,
+    backlight: 0,
     threadSpacing: 300,
+    fiberModel: true,
     yarnTau: 1.5,
     backFraction: 0.35,
     color: '#d9521f',
@@ -122,6 +139,10 @@ async function start(): Promise<void> {
 
   /** What the last bake (or import) produced; this is what Export writes. */
   let baked: { name: string; maps: WeaveMaps; moments: MomentLevel[]; twoLobes: TwoLobeLevel[] } | undefined;
+  /** Pattern and parameters of the current maps, and the selected preset's measured yarn. */
+  let bakedSpec: FabricSpec | undefined;
+  let presetYarn: YarnData | undefined;
+  let fabricMat: FabricMaterial | undefined;
   let noiseTiles: WaveNoiseTiles;
   let twoLayerLut: TwoLayerLut;
 
@@ -132,46 +153,90 @@ async function start(): Promise<void> {
     return makeNoiseTexture(noiseTiles);
   }
   let noise = bakeNoise();
-  const diffractionLut = bakeDiffractionLut();
-  const diffraction = makeDiffractionTexture(diffractionLut);
-  let twoLayer: ReturnType<typeof makeTwoLayerTexture> | undefined;
   let gapFraction = 0;
+
+  function srgbColor(): [number, number, number] {
+    const c = new Color(state.color);
+    return [c.r, c.g, c.b].map((v) => (v <= 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055)) as [number, number, number];
+  }
+
+  /** The editor's current pattern as a FabricSpec, with colour and the preset's yarn data. */
+  function specFromState(): FabricSpec {
+    const common = { color: srgbColor(), ...(presetYarn ? { yarn: presetYarn } : {}) };
+    if (state.fabric === 'knit') {
+      return {
+        kind: 'knit',
+        pattern: currentKnit(),
+        params: { stitchAspect: state.stitchAspect, yarnRadius: state.yarnRadius, relief: state.relief, irregularity: state.irregularity, seed: state.seed },
+        ...common,
+      };
+    }
+    return {
+      kind: 'woven',
+      pattern: currentPattern(),
+      params: { warpWidth: state.warpWidth, weftWidth: state.weftWidth, crimp: state.crimp, flatness: state.flatness, irregularity: state.irregularity, seed: state.seed },
+      ...common,
+    };
+  }
+
+  /** Everything FabricMaterial needs, as Export writes it (including the shading and yarn blocks). */
+  function currentAsset(): FabricAsset | undefined {
+    if (!baked || !bakedSpec) return undefined;
+    const spec = { ...bakedSpec, color: srgbColor(), ...(presetYarn ? { yarn: presetYarn } : {}) };
+    return {
+      name: baked.name,
+      settings: { ...state, yarnsPerRepeat },
+      maps: baked.maps,
+      moments: baked.moments,
+      twoLobes: baked.twoLobes,
+      twoLayer: twoLayerLut,
+      noise: noiseTiles,
+      shading: fabricShading(spec, baked.maps, state.threadSpacing),
+      ...(presetYarn ? { yarn: presetYarn } : {}),
+    };
+  }
 
   /** Approximate yarn diameter from ply count and diameter (circle packing of the plies). */
   function yarnDiameterUm(yarn: YarnData): number {
     return yarn.plyDiameterUm * ([1, 2, 2.15, 2.41][yarn.plies - 1] ?? Math.sqrt(yarn.plies) * 1.25);
   }
 
-  /** Two-layer table depends on colour, gap fraction and yarn density; cheap, rebaked on change. */
+  /**
+   * Two-layer table: from the preset's fiber data (Zhu et al. yarn scattering) when known and
+   * enabled, otherwise from the yarn density and back-scatter sliders. Cheap; rebaked on change.
+   */
   function rebakeTwoLayer(): void {
-    const linear = previewUniforms.color.value;
-    setTwoLayer(bakeTwoLayerLut({
-      albedo: [linear.r, linear.g, linear.b],
-      tau: state.yarnTau,
-      backFraction: state.backFraction,
-      gapFraction,
-      gapDepth: state.fabric === 'knit' ? state.yarnRadius * 2 : state.flatness * 0.5,
-    }));
+    const linear = new Color(state.color);
+    const useYarn = state.fiberModel && presetYarn !== undefined;
+    densityControl.enable(!useYarn);
+    backFractionControl.enable(!useYarn);
+    setTwoLayer(
+      bakeTwoLayerLut({
+        albedo: [linear.r, linear.g, linear.b],
+        tau: state.yarnTau,
+        backFraction: state.backFraction,
+        gapFraction,
+        gapDepth: state.fabric === 'knit' ? state.yarnRadius * 2 : state.flatness * 0.5,
+        ...(useYarn ? { yarn: { data: presetYarn!, fiber: fiberParams(specFromState()) } } : {}),
+      }),
+    );
   }
 
   function setTwoLayer(lut: TwoLayerLut): void {
     twoLayerLut = lut;
-    twoLayer?.dispose();
-    twoLayer = makeTwoLayerTexture(lut);
-    if (textures) {
-      textures.twoLayer = twoLayer;
-      rebuildMaterial();
-    }
+    rebuildMaterial();
   }
 
+  /** Gap widths and beam ratio from the thread spacing (see fabricShading), live on the material. */
   function updateGaps(): void {
+    if (!fabricMat) return;
     const s = state.threadSpacing;
     const knit = state.fabric === 'knit';
     const ax = knit ? 0.2 * s : (Math.max(1 - state.warpWidth, 0.02) * s) / 2;
     const ay = knit ? 0.2 * s : (Math.max(1 - state.weftWidth, 0.02) * s) / 2;
-    previewUniforms.gapHalfWidth.value.set(ax, ay);
+    fabricMat.fabric.gapHalfWidth.value.set(ax, ay);
     // The coherent beam spans about one thread spacing.
-    previewUniforms.beamRatio.value.set(s / 2 / ax, s / 2 / ay);
+    fabricMat.fabric.beamRatio.value.set(s / 2 / ax, s / 2 / ay);
   }
 
   function showStatus(): void {
@@ -215,7 +280,16 @@ async function start(): Promise<void> {
   function rebuildMaterial(): void {
     if (!textures) return;
     const old = plane.material;
-    plane.material = makePreviewMaterial(textures, state.view);
+    const tierIndex = (materialViews as readonly string[]).indexOf(state.view);
+    const asset = tierIndex >= 0 ? currentAsset() : undefined;
+    if (asset) {
+      fabricMat = new FabricMaterial(asset, { tier: tierIndex === 1 ? 'quality' : 'default', repeats: state.repeats });
+      plane.material = fabricMat;
+    } else {
+      fabricMat = undefined;
+      plane.material = makePreviewMaterial(textures, state.view);
+    }
+    updateLight();
     if (!Array.isArray(old)) old.dispose();
   }
 
@@ -225,6 +299,7 @@ async function start(): Promise<void> {
     let name: string;
     const t0 = performance.now();
     try {
+      bakedSpec = specFromState();
       if (state.fabric === 'knit') {
         const pattern = currentKnit();
         name = pattern.name;
@@ -262,23 +337,14 @@ async function start(): Promise<void> {
   /** Uploads baked maps; uses `lut` as the two-layer table if given, otherwise rebakes it. */
   function install(name: string, maps: WeaveMaps, mips: MomentLevel[], lobes: TwoLobeLevel[], statusText: string, lut?: TwoLayerLut): void {
     baked = { name, maps, moments: mips, twoLobes: lobes };
-    if (textures) for (const t of [textures.weave, textures.relief, textures.momentA, textures.momentB, textures.lobeA, textures.lobeB, textures.lobeC]) t.dispose();
+    if (textures) for (const t of [textures.weave, textures.relief]) t.dispose();
     let gaps = 0;
     for (let i = 2; i < maps.relief.length; i += 4) gaps += maps.relief[i]!;
     gapFraction = gaps / 255 / (maps.size * maps.size);
     updateLight();
     if (lut) setTwoLayer(lut);
     else rebakeTwoLayer();
-    textures = {
-      ...makeTextures(maps),
-      ...makeMomentTextures(mips),
-      ...makeTwoLobeTextures(lobes),
-      noise,
-      noiseInstances: defaultWaveNoiseParams.instances,
-      twoLayer: twoLayer!,
-      diffraction,
-      diffractionLut,
-    };
+    textures = { ...makeTextures(maps), noise, noiseInstances: defaultWaveNoiseParams.instances };
     aspect = maps.aspect;
     updateLight();
     rebuildMaterial();
@@ -287,16 +353,9 @@ async function start(): Promise<void> {
   }
 
   async function exportFabric(): Promise<void> {
-    if (!baked) return;
-    const bytes = await writeFabric({
-      name: baked.name,
-      settings: { ...state, yarnsPerRepeat },
-      maps: baked.maps,
-      moments: baked.moments,
-      twoLobes: baked.twoLobes,
-      twoLayer: twoLayerLut,
-      noise: noiseTiles,
-    });
+    const asset = currentAsset();
+    if (!baked || !asset) return;
+    const bytes = await writeFabric(asset);
     const link = document.createElement('a');
     link.href = URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/octet-stream' }));
     link.download = `${baked.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.fabric`;
@@ -324,6 +383,10 @@ async function start(): Promise<void> {
       noiseTiles = asset.noise;
       noise = makeNoiseTexture(noiseTiles);
       noiseMs = 0;
+      if (!(views as readonly string[]).includes(state.view)) state.view = materialViews[0];
+      presetYarn = asset.yarn;
+      if (asset.shading) state.threadSpacing = Math.round(asset.shading.threadSpacingUm);
+      bakedSpec = specFromState();
       gui.controllersRecursive().forEach((c) => c.updateDisplay());
       showFolders();
       install(asset.name, asset.maps, asset.moments, asset.twoLobes ?? bakeTwoLobeMips(asset.maps), `${asset.name} · ${asset.maps.size}² texels · imported from ${file.name}`, asset.twoLayer);
@@ -345,15 +408,22 @@ async function start(): Promise<void> {
     previewUniforms.lightDir.value.set(Math.cos(el) * Math.cos(az), Math.cos(el) * Math.sin(az), Math.sin(el));
     previewUniforms.color.value.set(state.color);
     previewUniforms.shininess.value = state.shininess;
-    previewUniforms.roughness.value = state.roughness;
-    previewUniforms.thickness.value = state.thickness;
-    previewUniforms.specular.value = state.specular;
-    previewUniforms.glint.value = state.glint;
-    previewUniforms.backlight.value = state.backlight;
-    updateGaps();
-    previewUniforms.yarnsPerRepeat.value = yarnsPerRepeat;
     // The plane is square: a repeat `aspect` times wider than tall needs that many more repeats along v.
     previewUniforms.repeats.value.set(state.repeats, state.repeats * aspect);
+    keyLight.position.set(Math.cos(el) * Math.cos(az), Math.cos(el) * Math.sin(az), Math.sin(el)).multiplyScalar(3);
+    keyLight.intensity = state.keyLight;
+    backLight.intensity = state.backlight;
+    scene.environmentIntensity = state.environment;
+    if (fabricMat) {
+      const f = fabricMat.fabric;
+      f.repeats.value.set(state.repeats, state.repeats * aspect);
+      f.color.value.set(state.color);
+      f.roughness.value = state.roughness;
+      f.thickness.value = state.thickness;
+      f.specular.value = state.specular;
+      f.glint.value = state.glint;
+      updateGaps();
+    }
   }
 
   function setColor(rgb: [number, number, number]): void {
@@ -374,6 +444,7 @@ async function start(): Promise<void> {
         state.knit = pattern.name as typeof state.knit;
       }
       setColor(knitPreset.color);
+      presetYarn = knitPreset.yarn;
       state.threadSpacing = Math.round(yarnDiameterUm(knitPreset.yarn) / (2 * state.yarnRadius));
     } else {
       const preset = wovenPresets.find((p) => p.id === id);
@@ -394,6 +465,7 @@ async function start(): Promise<void> {
         state.weave = 'plain';
       }
       setColor(preset.color);
+      presetYarn = preset.yarn;
       state.threadSpacing = Math.round(yarnDiameterUm(preset.yarn) / Math.max(state.warpWidth, 0.2));
     }
     gui.controllersRecursive().forEach((c) => c.updateDisplay());
@@ -455,13 +527,7 @@ async function start(): Promise<void> {
   const viewFolder = gui.addFolder('Preview');
   viewFolder.add(state, 'view', views).name('Show').onChange(rebuildMaterial);
   viewFolder.add(state, 'repeats', 1, 64, 1).name('Repeats on plane').onChange(updateLight);
-  viewFolder
-    .addColor(state, 'color')
-    .name('Color')
-    .onChange(() => {
-      updateLight();
-      rebakeTwoLayer();
-    });
+  viewFolder.addColor(state, 'color').name('Color').onChange(updateLight).onFinishChange(rebakeTwoLayer);
   viewFolder.add(state, 'roughness', 0.05, 1, 0.01).name('Fiber roughness (SGGX)').onChange(updateLight);
   viewFolder.add(state, 'thickness', 0.1, 10, 0.1).name('Optical thickness (SGGX)').onChange(updateLight);
   viewFolder.add(state, 'specular', 0, 3, 0.01).name('Specular strength (SGGX)').onChange(updateLight);
@@ -469,12 +535,30 @@ async function start(): Promise<void> {
   viewFolder.add(state, 'shininess', 4, 512, 1).name('Sharpness (unfiltered)').onChange(updateLight);
   viewFolder.add(state, 'lightAzimuth', -180, 180, 1).name('Light azimuth').onChange(updateLight);
   viewFolder.add(state, 'lightElevation', -90, 90, 1).name('Light elevation (< 0: behind)').onChange(updateLight);
+  viewFolder.add(state, 'keyLight', 0, 8, 0.1).name('Light intensity').onChange(updateLight);
+  viewFolder.add(state, 'environment', 0, 2, 0.01).name('Environment light').onChange(updateLight);
 
   const sheerFolder = gui.addFolder('Opacity and back light');
-  sheerFolder.add(state, 'backlight', 0, 10, 0.1).name('Back light intensity').onChange(updateLight);
+  sheerFolder.add(state, 'backlight', 0, 10, 0.1).name('Back light (behind, facing you)').onChange(updateLight);
   sheerFolder.add(state, 'threadSpacing', 50, 2000, 10).name('Thread spacing (µm)').onChange(updateLight);
-  sheerFolder.add(state, 'yarnTau', 0.1, 6, 0.05).name('Yarn density').onChange(rebakeTwoLayer);
-  sheerFolder.add(state, 'backFraction', 0.05, 0.95, 0.01).name('Back-scatter fraction').onChange(rebakeTwoLayer);
+  sheerFolder.add(state, 'fiberModel').name('Yarn scattering from fiber data').onChange(rebakeTwoLayer);
+  const densityControl = sheerFolder.add(state, 'yarnTau', 0.1, 6, 0.05).name('Yarn density').onChange(rebakeTwoLayer);
+  const backFractionControl = sheerFolder.add(state, 'backFraction', 0.05, 0.95, 0.01).name('Back-scatter fraction').onChange(rebakeTwoLayer);
+  sheerFolder
+    .add(
+      {
+        backlit: () => {
+          // Light through cloth only stands out when the front is dim, as against a window.
+          state.keyLight = 0;
+          state.environment = 0.08;
+          state.backlight = 4;
+          gui.controllersRecursive().forEach((c) => c.updateDisplay());
+          updateLight();
+        },
+      },
+      'backlit',
+    )
+    .name('Back-lit setup (dim front, light behind)');
 
   const fileFolder = gui.addFolder('File');
   fileFolder.add(fileActions, 'export').name('Export .fabric');
@@ -496,6 +580,8 @@ async function start(): Promise<void> {
   const fps = createFpsCounter(document.getElementById('fps')!);
   renderer.setAnimationLoop(() => {
     controls.update();
+    // Keep the back light directly behind the cloth, shining toward the camera.
+    backLight.position.copy(camera.position).negate();
     renderer.render(scene, camera);
     fps.tick();
   });
