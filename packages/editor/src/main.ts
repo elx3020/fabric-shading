@@ -1,6 +1,5 @@
 import GUI from 'lil-gui';
-import { ACESFilmicToneMapping, Color, DirectionalLight, Mesh, PerspectiveCamera, PlaneGeometry, PMREMGenerator, Scene, SRGBColorSpace, WebGPURenderer } from 'three/webgpu';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { ACESFilmicToneMapping, Color, DirectionalLight, Mesh, PerspectiveCamera, PlaneGeometry, Scene, SRGBColorSpace, WebGPURenderer } from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
   bakeKnitMaps,
@@ -38,6 +37,7 @@ import {
   type WeavePattern,
 } from '@fabric-shading/core';
 import { FabricMaterial } from '@fabric-shading/core/material';
+import { createEnvironment } from './environment.ts';
 import { createFpsCounter } from './fps.ts';
 import { makeNoiseTexture, makePreviewMaterial, makeTextures, materialViews, previewUniforms, views, type PreviewTextures, type View } from './preview.ts';
 
@@ -85,8 +85,10 @@ async function start(): Promise<void> {
 
   // The lit views use the real FabricMaterial under ordinary three.js lights: a key light
   // (azimuth, elevation), a back light straight behind the cloth facing the camera (for
-  // transmission and the diffraction cross), and a room environment.
-  scene.environment = new PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+  // transmission and the diffraction cross), and image-based light from a sky .hdr (or the
+  // user's own).
+  const env = createEnvironment(renderer, scene);
+  await env.loadDefault();
   const keyLight = new DirectionalLight(0xffffff, 2.5);
   const backLight = new DirectionalLight(0xffffff, 0);
   scene.add(keyLight, backLight);
@@ -122,6 +124,8 @@ async function start(): Promise<void> {
     lightElevation: 50,
     keyLight: 2.5,
     environment: 0.4,
+    environmentRotation: 0,
+    hdrBackground: false,
     backlight: 0,
     threadSpacing: 300,
     fiberModel: true,
@@ -540,6 +544,9 @@ async function start(): Promise<void> {
   viewFolder.add(state, 'lightElevation', -90, 90, 1).name('Light elevation (< 0: behind)').onChange(updateLight);
   viewFolder.add(state, 'keyLight', 0, 8, 0.1).name('Light intensity').onChange(updateLight);
   viewFolder.add(state, 'environment', 0, 2, 0.01).name('Environment light').onChange(updateLight);
+  viewFolder.add({ hdr: () => env.pick((m) => (status.textContent = m)) }, 'hdr').name('Load environment .hdr…');
+  viewFolder.add(state, 'environmentRotation', -180, 180, 1).name('Environment rotation').onChange((v: number) => env.setRotation(v));
+  viewFolder.add(state, 'hdrBackground').name('Show .hdr as background').onChange((v: boolean) => env.setBackground(v));
 
   const sheerFolder = gui.addFolder('Opacity and back light');
   sheerFolder.add(state, 'backlight', 0, 10, 0.1).name('Back light (behind, facing you)').onChange(updateLight);

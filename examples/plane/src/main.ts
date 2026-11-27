@@ -8,16 +8,15 @@ import {
   MeshBasicNodeMaterial,
   PerspectiveCamera,
   PlaneGeometry,
-  PMREMGenerator,
   Scene,
   SphereGeometry,
   SRGBColorSpace,
   WebGPURenderer,
 } from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { fabricFromPreset, knitPresets, readFabric, wovenPresets, type FabricAsset } from '@fabric-shading/core';
 import { FabricMaterial, type FabricTier } from '@fabric-shading/core/material';
+import { createEnvironment } from './environment.ts';
 import { createFpsCounter } from './fps.ts';
 
 const status = document.getElementById('status')!;
@@ -77,8 +76,9 @@ async function start(): Promise<void> {
 
   const scene = new Scene();
   scene.background = new Color(0x15161a);
-  const pmrem = new PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  // Image-based lighting from the bundled sky .hdr until the user loads another.
+  const env = createEnvironment(renderer, scene);
+  await env.loadDefault();
   scene.environmentIntensity = 0.5;
 
   const camera = new PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.01, 100);
@@ -105,6 +105,8 @@ async function start(): Promise<void> {
     glint: 0.5,
     sheerness: 1,
     environment: 0.5,
+    environmentRotation: 0,
+    hdrBackground: false,
     animate: true,
     waves: 0.06,
     lightBehind: false,
@@ -192,6 +194,9 @@ async function start(): Promise<void> {
   look.add(state, 'sheerness', 0, 1, 0.01).name('See-through gaps').onChange(applyParams);
   const lighting = gui.addFolder('Lighting');
   lighting.add(state, 'environment', 0, 2, 0.01).name('Environment').onChange(applyParams);
+  lighting.add({ hdr: () => env.pick((m) => (status.textContent = m)) }, 'hdr').name('Load environment .hdr…');
+  lighting.add(state, 'environmentRotation', -180, 180, 1).name('Environment rotation').onChange((v: number) => env.setRotation(v));
+  lighting.add(state, 'hdrBackground').name('Show .hdr as background').onChange((v: boolean) => env.setBackground(v));
   lighting.add(state, 'lightIntensity', 0, 10, 0.1).name('Light intensity').onChange(applyParams);
   lighting.add(state, 'lightBehind').name('Light behind cloth').onChange(applyParams);
   lighting.add(state, 'lightAzimuth', -180, 180, 1).name('Light azimuth').onChange(applyParams);
