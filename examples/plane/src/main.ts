@@ -187,7 +187,7 @@ async function start(): Promise<void> {
   gui.add({ load: () => fileInput.click() }, 'load').name('Load .fabric…');
   gui.add(state, 'tier', ['default', 'quality']).name('Tier').onChange(buildMaterial);
   const look = gui.addFolder('Look');
-  look.add(state, 'repeats', 2, 120, 1).name('Repeats on cloth').onChange(applyParams);
+  look.add(state, 'repeats', 2, 250, 1).name('Repeats on cloth').onChange(applyParams);
   look.add(state, 'roughness', 0.05, 1, 0.01).name('Fiber roughness').onChange(applyParams);
   look.add(state, 'specular', 0, 3, 0.01).name('Specular').onChange(applyParams);
   look.add(state, 'glint', 0, 1, 0.01).name('Glint').onChange(applyParams);
