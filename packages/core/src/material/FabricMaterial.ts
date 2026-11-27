@@ -229,10 +229,14 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
     const gapView = float(1).sub(coverage).mul(clamp(closing, 0, 1));
     // Blending shows the background through sheer gaps (alpha = opacity); the colour must then be
     // the yarn radiance scaled by the visible yarn share over alpha, or it is darkened twice.
-    const opacity = float(1).sub(gapView.mul(f.sheerness));
-    const weight = float(1).sub(gapView).div(max(opacity, 1e-3));
+    // Open gaps keep a tiny opacity so light added there (diffraction) is not discarded by the
+    // blend; dividing every term by opacity makes colour x alpha come out exact.
+    const opacity = max(float(1).sub(gapView.mul(f.sheerness)), 0.02);
+    const weight = float(1).sub(gapView).div(opacity);
+    // Open share of the pattern at normal incidence (two-layer table), for the light side.
+    const gapNormal = max(texture(t.twoLayer, vec2(1, 0.25)).w, 1e-4);
 
-    return { st, toFabric, coverage, opacity, weight, lobeInputs, occlusion: shade.y, yarnTangent, bent, nb, nn, layer, noiseOffset, glintContrast };
+    return { st, toFabric, coverage, opacity, weight, gapView, gapNormal, lobeInputs, occlusion: shade.y, yarnTangent, bent, nb, nn, layer, noiseOffset, glintContrast };
   }
 
   /** Speckle multipliers (mean 1) for the specular and diffuse parts; see bakeWaveNoise. */
@@ -368,7 +372,10 @@ class FabricLightingModel extends LightingModel {
     const spread = mix(float(1 / Math.PI), lobe, forward.w);
     const transmitted = forward.rgb.mul(mu).mul(spread).mul(back);
     // Gap light is seen through pixels that are mostly transparent; undo the blend's alpha.
-    const diffracted = m.diffraction(V.add(L)).mul(twoLayerGain.w).mul(back).div(max(n.opacity, 0.05));
+    // Diffracted light leaves through the open gaps under this pixel (the far-field average
+    // when they are unresolved), as far as they stay open toward the light too.
+    const lightOpen = clamp(twoLayerGain.w.div(n.gapNormal), 0, 1);
+    const diffracted = m.diffraction(V.add(L)).mul(n.gapView).mul(lightOpen).mul(f.sheerness).mul(back).div(n.opacity);
 
     out.directDiffuse.addAssign(color.mul(diffuse.add(transmitted).mul(glintDiffuse).mul(n.weight)));
     out.directSpecular.addAssign(color.mul(glintSpecular.mul(specular).add(diffracted)));
