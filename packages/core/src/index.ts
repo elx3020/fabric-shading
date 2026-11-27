@@ -29,7 +29,7 @@ export {
   type Stitch,
 } from './patterns/knit.ts';
 export { knitPresets, type KnitPreset, type SheenParams } from './presets.ts';
-export { sheenAlbedo, sheenLobe, sheenLtcAInv, sheenLtcB } from './lut/sheen.ts';
+export { sheenAlbedo, sheenLobe, sheenLtcAInv, sheenLtcBInv } from './lut/sheen.ts';
 export { wovenPresets, type WovenPreset, type YarnData } from './presets.ts';
 export { bakeMomentMips, bakeTwoLobeMips, type MomentLevel, type TwoLobeLevel } from './patterns/moments.ts';
 export { bakeWaveNoise, decodeWaveNoise, defaultWaveNoiseParams, encodeWaveNoise, WAVE_NOISE_MAX, type WaveNoiseParams, type WaveNoiseTiles } from './noise/waveNoise.ts';

@@ -42,4 +42,15 @@ describe('sheen layer', () => {
     const top = sheenLobe([0, 0, 1], V, 0.5);
     expect(back).toBeGreaterThan(top);
   });
+
+  it('is continuous through the head-on view, whatever side the viewer leans to', () => {
+    // Near V = N the tangent frame flips with the view's azimuth; the lobe must not.
+    const e = 0.01;
+    const L: Vec3 = [0.6, 0.3, Math.sqrt(1 - 0.45)];
+    for (const r of [0.3, 0.6, 1]) {
+      const a = sheenLobe(L, [e, 0, Math.sqrt(1 - e * e)], r);
+      const b = sheenLobe(L, [-e, 0, Math.sqrt(1 - e * e)], r);
+      expect(Math.abs(a - b)).toBeLessThan(0.1 * a);
+    }
+  });
 });
