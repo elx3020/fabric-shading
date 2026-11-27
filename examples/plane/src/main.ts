@@ -111,6 +111,7 @@ async function start(): Promise<void> {
     waves: 0.06,
     lightBehind: false,
     lightIntensity: 2,
+    lightSize: 0.03,
     lightAzimuth: 35,
     lightElevation: 45,
   };
@@ -137,6 +138,7 @@ async function start(): Promise<void> {
     f.specular.value = state.specular;
     f.glint.value = state.glint;
     f.sheerness.value = state.sheerness;
+    f.lightSize.value = state.lightSize;
     scene.environmentIntensity = state.environment;
     cloth.amplitude = state.waves;
     placeLight();
@@ -198,6 +200,7 @@ async function start(): Promise<void> {
   lighting.add(state, 'environmentRotation', -180, 180, 1).name('Environment rotation').onChange((v: number) => env.setRotation(v));
   lighting.add(state, 'hdrBackground').name('Show .hdr as background').onChange((v: boolean) => env.setBackground(v));
   lighting.add(state, 'lightIntensity', 0, 10, 0.1).name('Light intensity').onChange(applyParams);
+  lighting.add(state, 'lightSize', 0.005, 0.2, 0.001).name('Light size (rad)').onChange(applyParams);
   lighting.add(state, 'lightBehind').name('Light behind cloth').onChange(applyParams);
   lighting.add(state, 'lightAzimuth', -180, 180, 1).name('Light azimuth').onChange(applyParams);
   lighting.add(state, 'lightElevation', 5, 90, 1).name('Light elevation').onChange(applyParams);

@@ -52,6 +52,8 @@ Live parameters are TSL uniforms on `material.fabric`, so changing `.value` need
 | `glint` | Wave-optics glint strength, 0 to 1. |
 | `sheerness` | 0 is opaque; 1 lets light and background through the weave gaps. |
 | `ior` | Fiber index of refraction (Fresnel). Set from the yarn data when known. |
+| `yarnNormal` | Share of diffuse and transmitted light shaded with the yarn normal, 0 to 1. |
+| `lightSize` | Angular radius of the lights in radians (three's lights are points); sets how bright the diffraction cross is. |
 
 What it models:
 - SGGX fiber specular, prefiltered so distant cloth does not alias (Yang et al. 2026).
@@ -59,6 +61,7 @@ What it models:
 - Light scattering inside the yarn, aggregated from fiber, ply and yarn data (Zhu et al. 2023).
 - Bounces between the warp and weft layers.
 - Light through the gaps, including the diffraction cross around a light seen through sheer cloth.
+- Environment light from behind the cloth, passed on through the yarn.
 
 `material.dispose()` frees the fabric's textures. The diffraction table is shared by all materials and stays.
 

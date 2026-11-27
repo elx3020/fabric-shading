@@ -123,6 +123,7 @@ async function start(): Promise<void> {
     lightAzimuth: 40,
     lightElevation: 50,
     keyLight: 2.5,
+    lightSize: 0.03,
     environment: 0.4,
     environmentRotation: 0,
     hdrBackground: false,
@@ -428,6 +429,7 @@ async function start(): Promise<void> {
       f.specular.value = state.specular;
       f.glint.value = state.glint;
       f.yarnNormal.value = state.yarnNormal;
+      f.lightSize.value = state.lightSize;
       updateGaps();
     }
   }
@@ -543,6 +545,7 @@ async function start(): Promise<void> {
   viewFolder.add(state, 'lightAzimuth', -180, 180, 1).name('Light azimuth').onChange(updateLight);
   viewFolder.add(state, 'lightElevation', -90, 90, 1).name('Light elevation (< 0: behind)').onChange(updateLight);
   viewFolder.add(state, 'keyLight', 0, 8, 0.1).name('Light intensity').onChange(updateLight);
+  viewFolder.add(state, 'lightSize', 0.005, 0.2, 0.001).name('Light size (rad)').onChange(updateLight);
   viewFolder.add(state, 'environment', 0, 2, 0.01).name('Environment light').onChange(updateLight);
   viewFolder.add({ hdr: () => env.pick((m) => (status.textContent = m)) }, 'hdr').name('Load environment .hdr…');
   viewFolder.add(state, 'environmentRotation', -180, 180, 1).name('Environment rotation').onChange((v: number) => env.setRotation(v));
@@ -558,17 +561,18 @@ async function start(): Promise<void> {
     .add(
       {
         backlit: () => {
-          // Light through cloth only stands out when the front is dim, as against a window.
-          state.keyLight = 0;
-          state.environment = 0.08;
-          state.backlight = 4;
+          // Cloth held against a window: a broad, bright source behind, the room's own light
+          // (the environment, left as it is) in front, and a weak key light.
+          state.keyLight = 0.5;
+          state.backlight = 2.5;
+          state.lightSize = 0.1;
           gui.controllersRecursive().forEach((c) => c.updateDisplay());
           updateLight();
         },
       },
       'backlit',
     )
-    .name('Back-lit setup (dim front, light behind)');
+    .name('Back-lit setup (window behind)');
 
   const fileFolder = gui.addFolder('File');
   fileFolder.add(fileActions, 'export').name('Export .fabric');

@@ -1,4 +1,4 @@
-import { Color, DoubleSide, LightingModel, MeshStandardNodeMaterial, Vector2 } from 'three/webgpu';
+import { Color, DoubleSide, EnvironmentNode, LightingModel, MeshStandardNodeMaterial, Vector2 } from 'three/webgpu';
 import type { LightingModelDirectInput, Node, NodeBuilder, PhysicalLightingModel } from 'three/webgpu';
 import {
   abs,
@@ -15,12 +15,15 @@ import {
   fract,
   fwidth,
   int,
+  isolate,
   length,
   log,
+  materialEnvIntensity,
   max,
   mix,
   normalize,
   normalView,
+  normalWorld,
   positionView,
   positionViewDirection,
   select,
@@ -53,8 +56,6 @@ export interface FabricMaterialOptions {
 
 /** Wavelengths in micrometres for the R, G, B channels of the diffraction term. */
 const WAVELENGTHS = [0.65, 0.55, 0.45] as const;
-/** Angular radius of a light in sin(theta); a real lamp has size, which bounds the diffraction peak. */
-const SOURCE_RADIUS = 0.004;
 /** Plies across a yarn and noise segments along one yarn period, for noise instances. */
 const PLIES = 3;
 const SEGMENTS = 6;
@@ -131,7 +132,19 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
      * the normal's mips fade it into flat shading at a distance.
      */
     yarnNormal: uniform(0.75),
+    /**
+     * Angular radius of the lights (radians), which bounds the diffraction peak seen through the
+     * gaps. Three's lights are points, so this stands in for the lamp's size: 0.03 is a lamp of
+     * 12 cm at 2 m. The sun is 0.0047, which makes a far brighter, sharper cross.
+     */
+    lightSize: uniform(0.03),
   };
+
+  /**
+   * Environment light arriving on the back of the cloth, set while the shader is built
+   * (see FabricEnvironmentNode); absent when the scene has no environment.
+   */
+  backIrradiance: V3 | undefined;
 
   /** Shared per-pixel nodes the lighting model reads. */
   readonly nodes: ReturnType<FabricMaterial['buildNodes']>;
@@ -327,11 +340,17 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
       const u = abs(s).mul(scale);
       const fade = float(1).sub(smoothstep(uMax * 0.6, uMax, u));
       const density = texture(t.diffraction, vec2(u.div(uMax), row)).x.mul(scale).mul(fade);
-      return density.div(density.mul(2 * SOURCE_RADIUS).add(1));
+      return density.div(density.mul(f.lightSize.mul(2)).add(1));
     };
     const channel = (lambda: number) =>
       profile(deviation.x, f.gapHalfWidth.x, rowX, lambda).mul(profile(deviation.y, f.gapHalfWidth.y, rowY, lambda));
     return vec3(channel(WAVELENGTHS[0]), channel(WAVELENGTHS[1]), channel(WAVELENGTHS[2]));
+  }
+
+  /** three's environment lighting, plus the environment behind the cloth for transmission. */
+  override setupEnvironment(builder: NodeBuilder): EnvironmentNode | null {
+    const env = super.setupEnvironment(builder) as EnvironmentNode | null;
+    return env ? new FabricEnvironmentNode(env.envNode as Node, this) : null;
   }
 
   override setupLightingModel(): PhysicalLightingModel {
@@ -341,6 +360,31 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
   override dispose(): void {
     disposeFabricTextures(this.textures);
     super.dispose();
+  }
+}
+
+/**
+ * three's EnvironmentNode gathers environment light over the hemisphere the surface faces. Cloth
+ * also passes on light from the hemisphere behind it, so this adds the irradiance on the back
+ * side, read from the same prefiltered environment the same way.
+ */
+class FabricEnvironmentNode extends EnvironmentNode {
+  constructor(
+    envNode: Node,
+    private readonly material: FabricMaterial,
+  ) {
+    super(envNode);
+  }
+
+  override setup(builder: NodeBuilder): undefined {
+    super.setup(builder);
+    // After setup the environment is the PMREM node that three resolved for it.
+    const env = ((this as unknown as { _pmremNode: Node | null })._pmremNode ?? this.envNode) as unknown as {
+      context(values: object): V3;
+    };
+    const back = env.context({ getUV: () => normalWorld.negate(), getTextureLevel: () => float(1) });
+    this.material.backIrradiance = isolate(back.mul(Math.PI).mul(materialEnvIntensity)) as unknown as V3;
+    return undefined;
   }
 }
 
@@ -406,6 +450,13 @@ class FabricLightingModel extends LightingModel {
     // Hemispherical average gain: sample the two-layer table at mu = 2/3 (the cosine-weighted mean).
     const gain = texture(m.textures.twoLayer, vec2(2 / 3, 0.25)).rgb;
     reflectedLight.indirectDiffuse.addAssign(irradiance.add(iblIrradiance).mul(f.color as unknown as V3).mul(gain).mul(n.occlusion).mul(n.weight).mul(1 / Math.PI));
+    // Environment light from behind, passed on through the yarn: the forward albedo at the
+    // cosine-weighted mean angle, spread diffusely (the narrow share of a broad source is
+    // diffuse anyway). Light that crosses the open gaps unscattered is the blended background.
+    if (m.backIrradiance) {
+      const forward = texture(m.textures.twoLayer, vec2(2 / 3, 0.75)).rgb;
+      reflectedLight.indirectDiffuse.addAssign(m.backIrradiance.mul(forward).mul(n.weight).mul(1 / Math.PI));
+    }
     // Environment specular: prefiltered radiance times the lobe's directional albedo (Fresnel and
     // slab shadowing included), and the yarn occlusion. See bakeSpecularAlbedo.
     const V = n.toFabric(positionViewDirection);
