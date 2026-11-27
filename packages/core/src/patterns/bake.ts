@@ -28,7 +28,15 @@ export interface WeaveMaps {
   normal?: Uint8Array;
   /** Absent in files written before self-shadowing existed; the material then skips it. */
   horizon?: Uint8Array;
+  /**
+   * Depth of the full height range (relief R from 0 to 255) as a fraction of one repeat along
+   * u and v, for parallax (capped at half a cell). Absent in older files; the material then skips parallax.
+   */
+  reliefDepth?: [number, number];
 }
+
+/** Cap on the parallax depth, in cells (weave) or stitch units (knit). */
+const MAX_PARALLAX_DEPTH = 0.5;
 
 export interface BakeOptions {
   /** Texels per side of the repeat. */
@@ -84,6 +92,9 @@ function bake(src: BakeSource, options: BakeOptions): WeaveMaps {
   const height = new Float32Array(size * size);
   const surface = new Float32Array(size * size);
   const hMax = src.maxHeight;
+  // Parallax depth, capped at half a cell: thick knits stand taller than a stitch is wide, and a
+  // few-step march over more than a cell smears yarns into their neighbours.
+  const depth = Math.min(2 * hMax, MAX_PARALLAX_DEPTH);
 
   for (let y = 0; y < size; y++) {
     const v = (y + 0.5) / size;
@@ -114,7 +125,16 @@ function bake(src: BakeSource, options: BakeOptions): WeaveMaps {
     relief[i * 4 + 1] = Math.round(255 * Math.max(0, 1 - options.aoStrength * Math.min(1, cavity)));
   }
 
-  return { size, aspect: src.aspect, knitted: src.knitted, weave, relief, normal, horizon: horizonMap(surface, size, src.extent, src.grid) };
+  return {
+    size,
+    aspect: src.aspect,
+    knitted: src.knitted,
+    weave,
+    relief,
+    normal,
+    horizon: horizonMap(surface, size, src.extent, src.grid),
+    reliefDepth: [depth / src.extent[0], depth / src.extent[1]],
+  };
 }
 
 export function bakeWeaveMaps(pattern: WeavePattern, params: WeaveParams, options: BakeOptions = defaultBakeOptions): WeaveMaps {

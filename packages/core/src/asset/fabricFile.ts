@@ -75,6 +75,7 @@ interface Header {
   size: number;
   aspect: number;
   knitted: boolean;
+  reliefDepth?: [number, number];
   momentSizes: number[];
   twoLobeSizes?: number[];
   twoLayerSamples: number;
@@ -118,6 +119,7 @@ export function encodeFabric(asset: FabricAsset): Uint8Array {
     size: asset.maps.size,
     aspect: asset.maps.aspect,
     knitted: asset.maps.knitted,
+    ...(asset.maps.reliefDepth ? { reliefDepth: asset.maps.reliefDepth } : {}),
     momentSizes: asset.moments.map((m) => m.size),
     ...(asset.twoLobes ? { twoLobeSizes: asset.twoLobes.map((m) => m.size) } : {}),
     twoLayerSamples: asset.twoLayer.samples,
@@ -175,6 +177,7 @@ export function decodeFabric(bytes: Uint8Array): FabricAsset {
       relief: u8('relief'),
       ...(header.chunks.some((c) => c.id === 'normal') ? { normal: u8('normal') } : {}),
       ...(header.chunks.some((c) => c.id === 'horizon') ? { horizon: u8('horizon') } : {}),
+      ...(header.reliefDepth ? { reliefDepth: header.reliefDepth } : {}),
     },
     moments: header.momentSizes.map((size, i) => ({ size, a: floats(`moment.a.${i}`), b: floats(`moment.b.${i}`) })),
     ...(header.twoLobeSizes

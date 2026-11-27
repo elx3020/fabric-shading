@@ -106,6 +106,7 @@ async function start(): Promise<void> {
     sheen: 0.3,
     sheenRoughness: 0.5,
     selfShadow: 1,
+    parallax: 1,
     sheerness: 1,
     environment: 0.5,
     environmentRotation: 0,
@@ -150,6 +151,7 @@ async function start(): Promise<void> {
     f.sheen.value = state.sheen;
     f.sheenRoughness.value = state.sheenRoughness;
     f.selfShadow.value = state.selfShadow;
+    f.parallax.value = state.parallax;
     f.sheerness.value = state.sheerness;
     f.lightSize.value = state.lightSize;
     scene.environmentIntensity = state.environment;
@@ -210,6 +212,7 @@ async function start(): Promise<void> {
   look.add(state, 'sheen', 0, 1, 0.01).name('Sheen (fuzz)').onChange(applyParams);
   look.add(state, 'sheenRoughness', 0.01, 1, 0.01).name('Sheen roughness').onChange(applyParams);
   look.add(state, 'selfShadow', 0, 1, 0.01).name('Yarn self-shadowing').onChange(applyParams);
+  look.add(state, 'parallax', 0, 1, 0.01).name('Parallax (quality tier)').onChange(applyParams);
   look.add(state, 'sheerness', 0, 1, 0.01).name('See-through gaps').onChange(applyParams);
   const lighting = gui.addFolder('Lighting');
   lighting.add(state, 'environment', 0, 2, 0.01).name('Environment').onChange(applyParams);

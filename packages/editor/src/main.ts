@@ -119,6 +119,7 @@ async function start(): Promise<void> {
     sheen: 0.3,
     sheenRoughness: 0.5,
     selfShadow: 1,
+    parallax: 1,
     noiseCorrelation: defaultWaveNoiseParams.correlation,
     noiseHighOrder: defaultWaveNoiseParams.highOrderCorrelation,
     noiseSeed: defaultWaveNoiseParams.seed,
@@ -435,6 +436,7 @@ async function start(): Promise<void> {
       f.sheen.value = state.sheen;
       f.sheenRoughness.value = state.sheenRoughness;
       f.selfShadow.value = state.selfShadow;
+      f.parallax.value = state.parallax;
       f.lightSize.value = state.lightSize;
       updateGaps();
     }
@@ -554,6 +556,7 @@ async function start(): Promise<void> {
   viewFolder.add(state, 'sheen', 0, 1, 0.01).name('Sheen (fuzz)').onChange(updateLight);
   viewFolder.add(state, 'sheenRoughness', 0.01, 1, 0.01).name('Sheen roughness').onChange(updateLight);
   viewFolder.add(state, 'selfShadow', 0, 1, 0.01).name('Yarn self-shadowing').onChange(updateLight);
+  viewFolder.add(state, 'parallax', 0, 1, 0.01).name('Parallax (quality tier)').onChange(updateLight);
   viewFolder.add(state, 'shininess', 4, 512, 1).name('Sharpness (unfiltered)').onChange(updateLight);
   viewFolder.add(state, 'lightAzimuth', -180, 180, 1).name('Light azimuth').onChange(updateLight);
   viewFolder.add(state, 'lightElevation', -90, 90, 1).name('Light elevation (< 0: behind)').onChange(updateLight);
