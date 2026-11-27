@@ -29,6 +29,8 @@ export interface FabricTextures {
    * toward the macro normal once many yarns share a pixel.
    */
   normal: DataTexture;
+  /** Horizon sines toward +u, -u, +v, -v with mips; all zero (no shadowing) for older files. */
+  horizon: DataTexture;
   momentA: DataTexture;
   momentB: DataTexture;
   /** Quality tier; absent when the asset has no two-lobe mips. */
@@ -150,6 +152,7 @@ export function createFabricTextures(asset: FabricAsset): FabricTextures {
     relief,
     shade: shadeTexture(maps.relief, maps.size),
     normal: u8MipChain(maps.normal ?? deriveYarnNormals(maps), maps.size),
+    horizon: u8MipChain(maps.horizon ?? new Uint8Array(maps.size * maps.size * 4), maps.size),
     momentA: mipChain(asset.moments.map((l) => ({ size: l.size, data: l.a }))),
     momentB: mipChain(asset.moments.map((l) => ({ size: l.size, data: l.b }))),
     ...(asset.twoLobes
@@ -172,6 +175,6 @@ export function createFabricTextures(asset: FabricAsset): FabricTextures {
 
 /** Frees one fabric's textures; the shared diffraction table stays. */
 export function disposeFabricTextures(t: FabricTextures): void {
-  for (const tex of [t.weave, t.relief, t.shade, t.normal, t.momentA, t.momentB, t.twoLayer, t.noise, t.specularAlbedo]) tex.dispose();
+  for (const tex of [t.weave, t.relief, t.shade, t.normal, t.horizon, t.momentA, t.momentB, t.twoLayer, t.noise, t.specularAlbedo]) tex.dispose();
   if (t.lobes) for (const tex of [t.lobes.a, t.lobes.b, t.lobes.c]) tex.dispose();
 }

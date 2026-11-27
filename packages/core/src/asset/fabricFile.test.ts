@@ -44,6 +44,7 @@ describe('fabric file', () => {
     expectClose(asset.maps.weave, back.maps.weave);
     expect(back.maps.relief).toEqual(asset.maps.relief);
     expect(back.maps.normal).toEqual(asset.maps.normal);
+    expect(back.maps.horizon).toEqual(asset.maps.horizon);
     expect(back.moments.map((m) => m.size)).toEqual(asset.moments.map((m) => m.size));
     asset.moments.forEach((m, i) => {
       expectClose(m.a, back.moments[i]!.a);

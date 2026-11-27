@@ -171,6 +171,11 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
     sheenRoughness: uniform(0.5),
     /** Linear RGB colour of the loose fibers; set from the fiber colour fitted to the cloth. */
     sheenColor: uniform(new Color(0.8, 0.8, 0.8)),
+    /**
+     * Strength of shadows the yarns cast on each other under low light, 0..1 (from the baked
+     * horizon map; the visibility term of Zhu et al.'s model, here per light from 1 fetch).
+     */
+    selfShadow: uniform(1),
   };
 
   /**
@@ -301,7 +306,25 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
     const sheenReflect = clamp(f.sheen, 0, 1).mul(sheenAlbedo(muV, f.sheenRoughness));
     const sheenThrough = float(1).sub(sheenReflect.mul(float(1).sub(gapView)));
 
-    return { st, toFabric, coverage, opacity, weight, gapView, gapNormal, lobeInputs, occlusion: shade.y, yarnTangent, bent, nb, nn, layer, noiseOffset, glintContrast, sheenReflect, sheenThrough };
+    const horizon = texture(t.horizon, st);
+
+    return { st, toFabric, coverage, opacity, weight, gapView, gapNormal, lobeInputs, occlusion: shade.y, yarnTangent, bent, nb, nn, layer, noiseOffset, glintContrast, sheenReflect, sheenThrough, horizon };
+  }
+
+  /**
+   * Light reaching the yarn surface past the neighbouring yarns: the light's elevation against
+   * the horizon in its direction, blended between the u and v horizons by azimuth. The mipmapped
+   * horizon averages over the yarns a pixel covers, so distant cloth darkens only at low light.
+   */
+  selfShadowing(L: V3): F {
+    const h = this.nodes.horizon;
+    const xx = L.x.mul(L.x);
+    const wx = xx.div(xx.add(L.y.mul(L.y)).add(1e-6));
+    const hu = select(L.x.greaterThanEqual(0), h.x, h.y);
+    const hv = select(L.y.greaterThanEqual(0), h.z, h.w);
+    const horizon = mix(hv, hu, wx);
+    const visible = smoothstep(horizon.sub(0.12), horizon.add(0.04), L.z);
+    return mix(float(1), visible, this.fabric.selfShadow);
   }
 
   /** Speckle multipliers (mean 1) for the specular and diffuse parts; see bakeWaveNoise. */
@@ -462,8 +485,9 @@ class FabricLightingModel extends LightingModel {
     const out = reflectedLight as unknown as Record<'directDiffuse' | 'directSpecular', V3>;
 
     // Front: Lambert-like body reflection scaled by the inter-layer bounces, and fiber specular.
-    const diffuse = albedo.mul(twoLayerGain.rgb).mul(n.occlusion).mul(muShade.mul(1 / Math.PI)).mul(front);
-    const specular = m.specular(L, V, H).mul(front);
+    const shadow = m.selfShadowing(L);
+    const diffuse = albedo.mul(twoLayerGain.rgb).mul(n.occlusion).mul(muShade.mul(1 / Math.PI)).mul(front).mul(shadow);
+    const specular = m.specular(L, V, H).mul(front).mul(shadow);
     // Back: transmission through the yarn, split into light that kept close to straight
     // through (a von Mises-Fisher lobe around -L, Zhu et al.'s forward yarn lobe) and light
     // scattered into a diffuse glow; plus diffraction through the open gaps.
