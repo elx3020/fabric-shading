@@ -113,6 +113,7 @@ async function start(): Promise<void> {
     thickness: 2,
     specular: 1,
     glint: 0.5,
+    yarnNormal: 0.75,
     noiseCorrelation: defaultWaveNoiseParams.correlation,
     noiseHighOrder: defaultWaveNoiseParams.highOrderCorrelation,
     noiseSeed: defaultWaveNoiseParams.seed,
@@ -337,7 +338,7 @@ async function start(): Promise<void> {
   /** Uploads baked maps; uses `lut` as the two-layer table if given, otherwise rebakes it. */
   function install(name: string, maps: WeaveMaps, mips: MomentLevel[], lobes: TwoLobeLevel[], statusText: string, lut?: TwoLayerLut): void {
     baked = { name, maps, moments: mips, twoLobes: lobes };
-    if (textures) for (const t of [textures.weave, textures.relief]) t.dispose();
+    if (textures) for (const t of [textures.weave, textures.relief, textures.normal]) t.dispose();
     let gaps = 0;
     for (let i = 2; i < maps.relief.length; i += 4) gaps += maps.relief[i]!;
     gapFraction = gaps / 255 / (maps.size * maps.size);
@@ -422,6 +423,7 @@ async function start(): Promise<void> {
       f.thickness.value = state.thickness;
       f.specular.value = state.specular;
       f.glint.value = state.glint;
+      f.yarnNormal.value = state.yarnNormal;
       updateGaps();
     }
   }
@@ -532,6 +534,7 @@ async function start(): Promise<void> {
   viewFolder.add(state, 'thickness', 0.1, 10, 0.1).name('Optical thickness (SGGX)').onChange(updateLight);
   viewFolder.add(state, 'specular', 0, 3, 0.01).name('Specular strength (SGGX)').onChange(updateLight);
   viewFolder.add(state, 'glint', 0, 1, 0.01).name('Glint (wave noise)').onChange(updateLight);
+  viewFolder.add(state, 'yarnNormal', 0, 1, 0.01).name('Yarn normal shading').onChange(updateLight);
   viewFolder.add(state, 'shininess', 4, 512, 1).name('Sharpness (unfiltered)').onChange(updateLight);
   viewFolder.add(state, 'lightAzimuth', -180, 180, 1).name('Light azimuth').onChange(updateLight);
   viewFolder.add(state, 'lightElevation', -90, 90, 1).name('Light elevation (< 0: behind)').onChange(updateLight);

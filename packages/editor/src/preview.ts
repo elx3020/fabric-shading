@@ -1,12 +1,12 @@
 import { Color, DataArrayTexture, DataTexture, DataUtils, HalfFloatType, LinearFilter, MeshBasicNodeMaterial, NearestFilter, RepeatWrapping, RGBAFormat, UnsignedByteType, Vector2, Vector3 } from 'three/webgpu';
 import { abs, cameraPosition, dot, float, floor, fract, int, max, mix, normalize, positionWorld, pow, select, sin, sqrt, texture, uniform, uv, vec3 } from 'three/tsl';
 import type { Node } from 'three/webgpu';
-import { WAVE_NOISE_MAX, type WaveNoiseTiles, type WeaveMaps } from '@fabric-shading/core';
+import { deriveYarnNormals, WAVE_NOISE_MAX, type WaveNoiseTiles, type WeaveMaps } from '@fabric-shading/core';
 
 /** Views drawn with the real FabricMaterial (main.ts); the rest are debug views of the baked maps. */
 export const materialViews = ['lit (default tier)', 'lit (quality tier, 2 lobes)'] as const;
 export const NOISE_VIEW = 'noise tiles (left: glint grain, right: inner grain)';
-export const views = [...materialViews, 'lit (unfiltered)', 'tangent', 'across h', 'along z', 'height', 'occlusion', 'gap', 'yarn id', NOISE_VIEW] as const;
+export const views = [...materialViews, 'lit (unfiltered)', 'tangent', 'across h', 'along z', 'height', 'normals', 'occlusion', 'gap', 'yarn id', NOISE_VIEW] as const;
 export type View = (typeof views)[number];
 
 /** Uniforms the GUI drives without rebuilding the material. */
@@ -22,6 +22,7 @@ export const previewUniforms = {
 export interface PreviewTextures {
   weave: DataTexture;
   relief: DataTexture;
+  normal: DataTexture;
   noise: DataArrayTexture;
   /** Instances per noise set; layers [0, n) reflection, [n, 2n) high-order. */
   noiseInstances: number;
@@ -55,12 +56,13 @@ function hash3(p: Node<'vec3'>): Node<'float'> {
 
 
 
-export function makeTextures(maps: WeaveMaps): { weave: DataTexture; relief: DataTexture } {
+export function makeTextures(maps: WeaveMaps): { weave: DataTexture; relief: DataTexture; normal: DataTexture } {
   const half = new Uint16Array(maps.weave.length);
   for (let i = 0; i < half.length; i++) half[i] = DataUtils.toHalfFloat(maps.weave[i]!);
   const weave = new DataTexture(half, maps.size, maps.size, RGBAFormat, HalfFloatType);
   const relief = new DataTexture(maps.relief, maps.size, maps.size, RGBAFormat, UnsignedByteType);
-  for (const t of [weave, relief]) {
+  const normal = new DataTexture(maps.normal ?? deriveYarnNormals(maps), maps.size, maps.size, RGBAFormat, UnsignedByteType);
+  for (const t of [weave, relief, normal]) {
     t.wrapS = t.wrapT = RepeatWrapping;
     // Tangents and ids must not be blended across yarn edges until the multi-scale tables exist.
     t.magFilter = NearestFilter;
@@ -69,7 +71,7 @@ export function makeTextures(maps: WeaveMaps): { weave: DataTexture; relief: Dat
     t.needsUpdate = true;
   }
   relief.magFilter = LinearFilter;
-  return { weave, relief };
+  return { weave, relief, normal };
 }
 
 function octDecode(e: Node<'vec2'>): Node<'vec3'> {
@@ -111,6 +113,10 @@ export function makePreviewMaterial(textures: PreviewTextures, view: View): Mesh
     case 'height':
       color = vec3(r.x);
       break;
+    case 'normals':
+      // The usual normal-map colours: x to red, y to green, up is blue.
+      color = texture(textures.normal, st).rgb;
+      break;
     case 'occlusion':
       color = vec3(r.y);
       break;
@@ -135,10 +141,8 @@ export function makePreviewMaterial(textures: PreviewTextures, view: View): Mesh
       const L = normalize(previewUniforms.lightDir);
       const V = normalize(cameraPosition.sub(positionWorld));
       const H = normalize(L.add(V));
-      const across = w.z.mul(2).sub(1);
-      // Round yarn cross-section bends the normal across the yarn.
-      const side = normalize(vec3(tangent.y.negate(), tangent.x, 0));
-      const N0 = normalize(vec3(0, 0, 1).mul(sqrt(max(float(1).sub(across.mul(across)), 0.05))).add(side.mul(across)));
+      // The baked yarn normal bends across the yarn cross-section.
+      const N0 = normalize(texture(textures.normal, st).xyz.mul(2).sub(1));
       const diffuse = max(dot(N0, L), 0).mul(0.75).add(0.25);
       const th = dot(tangent, H);
       const spec = pow(sqrt(max(float(1).sub(th.mul(th)), 0)), previewUniforms.shininess).mul(0.6);

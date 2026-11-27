@@ -1,5 +1,5 @@
 import { hash01 } from './hash.ts';
-import { MAX_REPEAT, YarnKind, type WeaveSample } from './weave.ts';
+import { MAX_REPEAT, YarnKind, yarnNormal, type WeaveSample } from './weave.ts';
 import type { Vec3 } from './octahedral.ts';
 
 /** K = knit stitch (V legs on this side), P = purl stitch (loop heads and sinkers on this side). */
@@ -166,7 +166,7 @@ export function knitSampler(pattern: KnitPattern, p: KnitParams): (u: number, v:
   const floor = -maxKnitHeight(p);
 
   return (u, v) => {
-    let best: WeaveSample = { kind: YarnKind.None, tangent: [0, 0, 1], h: 0, z: 0, yarnId: 0, height: floor };
+    let best: WeaveSample = { kind: YarnKind.None, tangent: [0, 0, 1], h: 0, z: 0, yarnId: 0, height: floor, normal: [0, 0, 1] };
     const px0 = u * W;
     const py0 = v * H;
     // Pieces reach into neighbouring repeats, so test the point against 3x3 tiled copies.
@@ -209,7 +209,10 @@ export function knitSampler(pattern: KnitPattern, p: KnitParams): (u: number, v:
           const stitchCol = Math.floor((ax + bx) / 2 / p.stitchAspect);
           const z = (((stitchCol + along) / pattern.cols) % 1 + 1) % 1;
           const tangent: Vec3 = [tx / tl, ty / tl, tz / tl];
-          best = { kind: YarnKind.Loop, tangent, h: side * across, z, yarnId: line.row, height };
+          // h grows toward the left of the yarn direction, (-ty, tx) in the fabric plane.
+          const pl = Math.hypot(tx, ty) || 1;
+          const normal = yarnNormal(tangent, [-ty / pl, tx / pl, 0], side * across, 1);
+          best = { kind: YarnKind.Loop, tangent, h: side * across, z, yarnId: line.row, height, normal };
         }
       }
     }

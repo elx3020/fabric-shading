@@ -100,6 +100,30 @@ export interface WeaveSample {
   yarnId: number;
   /** Surface height in cell units (cell = 1). */
   height: number;
+  /** Shading normal of the yarn surface in fabric space, unit length; up in the gaps. */
+  normal: Vec3;
+}
+
+/**
+ * Normal of a yarn with an elliptical cross-section (height over half-width = `flatness`) at
+ * across-yarn position h, where `across` is the in-plane direction of growing h. The normal is
+ * made perpendicular to the yarn tangent, so it tilts with the crimp. Zhu et al. (2023) derive
+ * their ply normals the same way, from the round cross-section around the yarn axis.
+ */
+export function yarnNormal(tangent: Vec3, across: Vec3, h: number, flatness: number): Vec3 {
+  const hc = Math.min(Math.max(h, -1), 1);
+  const s = Math.sqrt(1 - hc * hc);
+  // Gradient of the ellipse (x/a)^2 + (z/b)^2 = 1 scaled by b: (h b/a, sqrt(1 - h^2)).
+  const k = hc * flatness;
+  let nx = across[0] * k;
+  let ny = across[1] * k;
+  let nz = s + across[2] * k;
+  const d = nx * tangent[0] + ny * tangent[1] + nz * tangent[2];
+  nx -= d * tangent[0];
+  ny -= d * tangent[1];
+  nz -= d * tangent[2];
+  const len = Math.hypot(nx, ny, nz);
+  return len > 1e-6 ? [nx / len, ny / len, nz / len] : [0, 0, 1];
 }
 
 interface YarnShape {
@@ -156,6 +180,7 @@ export function sampleWeave(pattern: WeavePattern, p: WeaveParams, u: number, v:
     z: 0,
     yarnId: 0,
     height: -maxWeaveHeight(p),
+    normal: [0, 0, 1],
   };
 
   if (Math.abs(hWarp) <= 1) {
@@ -165,7 +190,9 @@ export function sampleWeave(pattern: WeavePattern, p: WeaveParams, u: number, v:
     const height = amp * prof.center + warp.halfWidth * p.flatness * Math.sqrt(1 - hWarp * hWarp);
     const t: Vec3 = [0, 1, amp * prof.slope];
     const len = Math.hypot(t[0], t[1], t[2]);
-    best = { kind: YarnKind.Warp, tangent: [0, t[1] / len, t[2] / len], h: hWarp, z: v - Math.floor(v), yarnId: col, height };
+    const tangent: Vec3 = [0, t[1] / len, t[2] / len];
+    const normal = yarnNormal(tangent, [1, 0, 0], hWarp, p.flatness);
+    best = { kind: YarnKind.Warp, tangent, h: hWarp, z: v - Math.floor(v), yarnId: col, height, normal };
   }
 
   if (Math.abs(hWeft) <= 1) {
@@ -176,7 +203,9 @@ export function sampleWeave(pattern: WeavePattern, p: WeaveParams, u: number, v:
     if (height > best.height) {
       const t: Vec3 = [1, 0, amp * prof.slope];
       const len = Math.hypot(t[0], t[1], t[2]);
-      best = { kind: YarnKind.Weft, tangent: [t[0] / len, 0, t[2] / len], h: hWeft, z: u - Math.floor(u), yarnId: row, height };
+      const tangent: Vec3 = [t[0] / len, 0, t[2] / len];
+      const normal = yarnNormal(tangent, [0, 1, 0], hWeft, p.flatness);
+      best = { kind: YarnKind.Weft, tangent, h: hWeft, z: u - Math.floor(u), yarnId: row, height, normal };
     }
   }
 

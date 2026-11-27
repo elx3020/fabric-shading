@@ -1,6 +1,6 @@
-import { octEncode } from './octahedral.ts';
+import { octDecode, octEncode, type Vec3 } from './octahedral.ts';
 import { knitAspect, knitSampler, maxKnitHeight, type KnitParams, type KnitPattern } from './knit.ts';
-import { maxWeaveHeight, sampleWeave, YarnKind, type WeaveParams, type WeavePattern, type WeaveSample } from './weave.ts';
+import { maxWeaveHeight, sampleWeave, YarnKind, yarnNormal, type WeaveParams, type WeavePattern, type WeaveSample } from './weave.ts';
 
 /**
  * Maps for one pattern repeat, `size` x `size` texels, row-major from v = 0.
@@ -10,6 +10,9 @@ import { maxWeaveHeight, sampleWeave, YarnKind, type WeaveParams, type WeavePatt
  *   A = along-yarn z as a fraction of the repeat.
  * - `relief` (RGBA8): R = height, G = ambient occlusion, B = gap mask (255 = no yarn),
  *   A = yarn id * 2 + (1 if weft), so the shader can recover both. Knits store course * 2.
+ * - `normal` (RGBA8): RGB = yarn shading normal in fabric space mapped to 0..255, A = 255.
+ *   Box-filtered mips of it average toward the macro normal, which is how Yang et al. (2026)
+ *   prefilter their yarn-normal diffuse term.
  */
 export interface WeaveMaps {
   size: number;
@@ -18,6 +21,8 @@ export interface WeaveMaps {
   knitted: boolean;
   weave: Float32Array;
   relief: Uint8Array;
+  /** Absent in files written before yarn normals existed; see {@link deriveYarnNormals}. */
+  normal?: Uint8Array;
 }
 
 export interface BakeOptions {
@@ -66,6 +71,7 @@ function bake(src: BakeSource, options: BakeOptions): WeaveMaps {
 
   const weave = new Float32Array(size * size * 4);
   const relief = new Uint8Array(size * size * 4);
+  const normal = new Uint8Array(size * size * 4);
   const height = new Float32Array(size * size);
   const hMax = src.maxHeight;
 
@@ -85,6 +91,7 @@ function bake(src: BakeSource, options: BakeOptions): WeaveMaps {
       relief[i * 4 + 0] = Math.round(h01 * 255);
       relief[i * 4 + 2] = s.kind === YarnKind.None ? 255 : 0;
       relief[i * 4 + 3] = s.kind === YarnKind.None ? 0 : s.yarnId * 2 + (s.kind === YarnKind.Weft ? 1 : 0);
+      encodeNormal(normal, i, s.normal);
     }
   }
 
@@ -96,7 +103,7 @@ function bake(src: BakeSource, options: BakeOptions): WeaveMaps {
     relief[i * 4 + 1] = Math.round(255 * Math.max(0, 1 - options.aoStrength * Math.min(1, cavity)));
   }
 
-  return { size, aspect: src.aspect, knitted: src.knitted, weave, relief };
+  return { size, aspect: src.aspect, knitted: src.knitted, weave, relief, normal };
 }
 
 export function bakeWeaveMaps(pattern: WeavePattern, params: WeaveParams, options: BakeOptions = defaultBakeOptions): WeaveMaps {
@@ -130,4 +137,34 @@ export function decodeYarnId(alpha: number, gap: number, knitted = false): { kin
   if (gap > 127) return { kind: YarnKind.None, yarnId: 0 };
   if (knitted) return { kind: YarnKind.Loop, yarnId: alpha >> 1 };
   return { kind: alpha & 1 ? YarnKind.Weft : YarnKind.Warp, yarnId: alpha >> 1 };
+}
+
+function encodeNormal(out: Uint8Array, i: number, n: Vec3): void {
+  out[i * 4] = Math.round((n[0] * 0.5 + 0.5) * 255);
+  out[i * 4 + 1] = Math.round((n[1] * 0.5 + 0.5) * 255);
+  out[i * 4 + 2] = Math.round((n[2] * 0.5 + 0.5) * 255);
+  out[i * 4 + 3] = 255;
+}
+
+/**
+ * Yarn normals rebuilt from the weave and relief maps, for files saved before the baker wrote
+ * them. The cross-section's flatness is not stored, so yarns are taken as round.
+ */
+export function deriveYarnNormals(maps: WeaveMaps): Uint8Array {
+  const n = maps.size * maps.size;
+  const out = new Uint8Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    const { kind } = decodeYarnId(maps.relief[i * 4 + 3]!, maps.relief[i * 4 + 2]!, maps.knitted);
+    if (kind === YarnKind.None) {
+      encodeNormal(out, i, [0, 0, 1]);
+      continue;
+    }
+    const t = octDecode([maps.weave[i * 4]!, maps.weave[i * 4 + 1]!]);
+    const h = maps.weave[i * 4 + 2]! * 2 - 1;
+    // Same across directions as the samplers: +u for warp, +v for weft, left of the yarn for knits.
+    const pl = Math.hypot(t[0], t[1]) || 1;
+    const across: Vec3 = kind === YarnKind.Warp ? [1, 0, 0] : kind === YarnKind.Weft ? [0, 1, 0] : [-t[1] / pl, t[0] / pl, 0];
+    encodeNormal(out, i, yarnNormal(t, across, h, 1));
+  }
+  return out;
 }

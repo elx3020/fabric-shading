@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { bakeWeaveMaps, decodeYarnId } from './bake.ts';
+import { bakeKnitMaps, bakeWeaveMaps, decodeYarnId, deriveYarnNormals } from './bake.ts';
+import { defaultKnitParams, jerseyKnit } from './knit.ts';
 import { octDecode, octEncode, type Vec3 } from './octahedral.ts';
-import { defaultWeaveParams, plainWeave, satinWeave, YarnKind } from './weave.ts';
+import { defaultWeaveParams, plainWeave, satinWeave, YarnKind, yarnNormal } from './weave.ts';
 
 describe('octahedral encoding', () => {
   it('round-trips directions on both hemispheres', () => {
@@ -57,5 +58,50 @@ describe('bakeWeaveMaps', () => {
 
   it('rejects unusable sizes', () => {
     expect(() => bakeWeaveMaps(plainWeave(), defaultWeaveParams, { size: 4, aoStrength: 0 })).toThrow(RangeError);
+  });
+});
+
+describe('yarn normals', () => {
+  const decode = (n: Uint8Array, i: number): Vec3 => [n[i * 4]! / 127.5 - 1, n[i * 4 + 1]! / 127.5 - 1, n[i * 4 + 2]! / 127.5 - 1];
+
+  it('are perpendicular to the yarn tangent and face up', () => {
+    const t: Vec3 = [0, 0.9 / Math.hypot(0.9, 0.436), 0.436 / Math.hypot(0.9, 0.436)];
+    for (const h of [-0.95, -0.5, 0, 0.5, 0.95]) {
+      const n = yarnNormal(t, [1, 0, 0], h, 0.6);
+      expect(Math.hypot(...n)).toBeCloseTo(1, 6);
+      expect(n[0] * t[0] + n[1] * t[1] + n[2] * t[2]).toBeCloseTo(0, 6);
+      expect(n[2]).toBeGreaterThan(0);
+      expect(Math.sign(n[0])).toBe(Math.sign(h) || 0);
+    }
+  });
+
+  it('tilt toward the yarn edges across a warp and stay up in the gaps', () => {
+    const maps = bakeWeaveMaps(plainWeave(), { ...defaultWeaveParams, warpWidth: 0.5, weftWidth: 0.5, irregularity: 0 }, { size: 64, aoStrength: 0 });
+    let gapsUp = true;
+    let tilted = 0;
+    for (let i = 0; i < 64 * 64; i++) {
+      const n = decode(maps.normal!, i);
+      if (maps.relief[i * 4 + 2]! > 127) gapsUp &&= n[2] > 0.99;
+      else if (Math.hypot(n[0], n[1]) > 0.5) tilted++;
+    }
+    expect(gapsUp).toBe(true);
+    expect(tilted).toBeGreaterThan(0);
+  });
+
+  it('can be rebuilt from older maps', () => {
+    const maps = bakeWeaveMaps(plainWeave(), { ...defaultWeaveParams, flatness: 1, irregularity: 0 }, { size: 32, aoStrength: 0 });
+    const derived = deriveYarnNormals(maps);
+    let worst = 0;
+    for (let i = 0; i < 32 * 32; i++) {
+      const a = decode(maps.normal!, i);
+      const b = decode(derived, i);
+      worst = Math.max(worst, Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
+    }
+    expect(worst).toBeLessThan(0.05);
+  });
+
+  it('are baked for knits too', () => {
+    const maps = bakeKnitMaps(jerseyKnit(), defaultKnitParams, { size: 32, aoStrength: 0 });
+    expect(maps.normal!.length).toBe(32 * 32 * 4);
   });
 });
