@@ -55,6 +55,7 @@ Live parameters are TSL uniforms on `material.fabric`, so changing `.value` need
 | `yarnNormal` | Share of diffuse and transmitted light shaded with the yarn normal, 0 to 1. |
 | `sheen`, `sheenRoughness`, `sheenColor` | Fly-away fiber sheen layer: amount 0 to 1, lobe width, fiber colour. Set from the fabric (cotton and wool have more). |
 | `selfShadow` | Strength of the shadows yarns cast on each other under low light, 0 to 1 (baked horizon map). |
+| `parallax` | Strength of the parallax offset in the quality tier, 0 to 1: yarns hide what lies behind them at grazing views. Fades out with distance. |
 | `lightSize` | Angular radius of the lights in radians (three's lights are points); sets how bright the diffraction cross is. |
 
 What it models:

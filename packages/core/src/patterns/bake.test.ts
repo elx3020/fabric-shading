@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { bakeKnitMaps, bakeWeaveMaps, decodeYarnId, deriveYarnNormals, horizonMap } from './bake.ts';
 import { defaultKnitParams, jerseyKnit } from './knit.ts';
 import { octDecode, octEncode, type Vec3 } from './octahedral.ts';
-import { defaultWeaveParams, plainWeave, satinWeave, YarnKind, yarnNormal } from './weave.ts';
+import { defaultWeaveParams, maxWeaveHeight, plainWeave, satinWeave, twillWeave, YarnKind, yarnNormal } from './weave.ts';
 
 describe('octahedral encoding', () => {
   it('round-trips directions on both hemispheres', () => {
@@ -123,5 +123,13 @@ describe('horizon map', () => {
     const maps = bakeWeaveMaps(plainWeave(), defaultWeaveParams, { size: 32, aoStrength: 0 });
     expect(maps.horizon!.length).toBe(32 * 32 * 4);
     expect(Math.max(...maps.horizon!)).toBeGreaterThan(0);
+  });
+
+  it('records the relief depth for parallax, in repeats along u and v', () => {
+    const maps = bakeWeaveMaps(twillWeave(2, 1), defaultWeaveParams, { size: 32, aoStrength: 0 });
+    const [du, dv] = maps.reliefDepth!;
+    // A 3x3 twill repeat: the height range (2 x maxWeaveHeight cells, capped at half a cell) over 3 cells.
+    expect(du).toBeCloseTo(Math.min(2 * maxWeaveHeight(defaultWeaveParams), 0.5) / 3, 6);
+    expect(dv).toBeCloseTo(du, 6);
   });
 });

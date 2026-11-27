@@ -1,5 +1,5 @@
 import { Color, DoubleSide, EnvironmentNode, LightingModel, MeshStandardNodeMaterial, Vector2 } from 'three/webgpu';
-import type { LightingModelDirectInput, Node, NodeBuilder, PhysicalLightingModel } from 'three/webgpu';
+import type { LightingModelDirectInput, Node, NodeBuilder, PhysicalLightingModel, Texture } from 'three/webgpu';
 import {
   abs,
   asin,
@@ -59,6 +59,8 @@ const WAVELENGTHS = [0.65, 0.55, 0.45] as const;
 /** Plies across a yarn and noise segments along one yarn period, for noise instances. */
 const PLIES = 3;
 const SEGMENTS = 6;
+/** Ray-march steps of the quality tier's parallax offset. */
+const PARALLAX_STEPS = 6;
 
 type F = Node<'float'>;
 type V3 = Node<'vec3'>;
@@ -176,6 +178,11 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
      * horizon map; the visibility term of Zhu et al.'s model, here per light from 1 fetch).
      */
     selfShadow: uniform(1),
+    /**
+     * Strength of the parallax offset in the quality tier, 0..1: yarns hide what lies behind
+     * them at grazing views (Zhu et al. 2024, sec. 3.2). Fades out with distance by itself.
+     */
+    parallax: uniform(1),
   };
 
   /**
@@ -251,36 +258,70 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
     const B = normalize(dp2perp.mul(duv1.y).add(dp1perp.mul(duv2.y)));
     const toFabric = (w: V3): V3 => vec3(dot(w, T), dot(w, B), dot(w, N));
 
-    const weave = texture(t.weave, st);
-    const relief = texture(t.relief, st);
-    const shade = texture(t.shade, st);
+    // Parallax (quality tier): march the view ray down through the relief in a few steps and
+    // read every map where it first meets the yarns. Mip levels keep following the plain UVs
+    // (Zhu et al. 2024, sec. 5.2).
+    let sp: V2 = st;
+    const depth = this.asset.maps.reliefDepth;
+    const parallax = this.tier === 'quality' && depth !== undefined;
+    if (parallax) {
+      const Vf = toFabric(positionViewDirection);
+      // Fade by how far the offset would move the image on screen: below about a pixel there is
+      // nothing to see, and above that the march reads mip-filtered heights, so it stays stable
+      // even with many repeats on the cloth.
+      const dirFull = Vf.xy.div(max(Vf.z, 0.4)).mul(vec2(depth[0], depth[1]));
+      const offsetPixels = length(dirFull).div(max(length(fwidth(st)), 1e-6));
+      const fade = smoothstep(0.75, 2, offsetPixels).mul(clamp(f.parallax, 0, 1));
+      const dir = dirFull.mul(fade);
+      const depthAt = (s: V2): F => float(1).sub(texture(t.shade, s).grad(duv1, duv2).x);
+      // Linear search for the first layer below the surface, then intersect the segment between
+      // the last two samples (parallax occlusion mapping), which removes the stair steps.
+      let prevGap: F = depthAt(st);
+      let hit: F = float(1);
+      let done: F = float(0);
+      for (let i = 1; i <= PARALLAX_STEPS; i++) {
+        const layer = i / PARALLAX_STEPS;
+        const gap = depthAt(st.sub(dir.mul(layer))).sub(layer);
+        const crossing = step(gap, 0).mul(float(1).sub(done));
+        const between = prevGap.div(max(prevGap.sub(gap), 1e-4));
+        hit = mix(hit, between.add(i - 1).div(PARALLAX_STEPS), crossing);
+        done = max(done, crossing);
+        prevGap = gap;
+      }
+      sp = st.sub(dir.mul(clamp(hit, 0, 1)));
+    }
+    const look = (tex: Texture) => (parallax ? texture(tex, sp).grad(duv1, duv2) : texture(tex, st));
+
+    const weave = look(t.weave);
+    const relief = look(t.relief);
+    const shade = look(t.shade);
     const yarnTangent = octDecode(weave.xy);
 
     let coverage: F;
     let lobeInputs: { m: [F, F, F, F, F]; w: F }[];
     if (this.tier === 'quality' && t.lobes) {
-      const a = texture(t.lobes.a, st);
-      const b = texture(t.lobes.b, st);
-      const c = texture(t.lobes.c, st);
+      const a = look(t.lobes.a);
+      const b = look(t.lobes.b);
+      const c = look(t.lobes.c);
       coverage = a.w.add(c.w);
       lobeInputs = [
         { m: [a.x, a.y, a.z, b.x, b.y], w: a.w },
         { m: [c.x, c.y, c.z, b.z, b.w], w: c.w },
       ];
     } else {
-      const a = texture(t.momentA, st);
-      const b = texture(t.momentB, st);
+      const a = look(t.momentA);
+      const b = look(t.momentB);
       coverage = a.w;
       lobeInputs = [{ m: [a.x, a.y, a.z, b.x, b.y], w: a.w }];
     }
 
     // Yarn shading normal from the baked map; its mips average it toward the macro normal.
-    const yarnN = texture(t.normal, st).xyz.mul(2).sub(1);
+    const yarnN = look(t.normal).xyz.mul(2).sub(1);
     const bent = yarnN.div(max(length(yarnN), 1e-3));
     // Noise instance per ply and short yarn segment, in a frame bent by the yarn cross-section.
     const nb = normalize(cross(bent, yarnTangent));
     const nn = cross(yarnTangent, nb);
-    const cell = floor(st);
+    const cell = floor(sp);
     const seed = vec3(relief.w.mul(255).round().add(cell.x.mul(97)), floor(weave.w.mul(SEGMENTS)).add(cell.y.mul(57)), floor(weave.z.mul(PLIES)).add(1));
     const layer = floor(hash3(seed).mul(t.noiseInstances));
     const noiseOffset = vec2(hash3(seed.add(3.1)), hash3(seed.add(7.7)));
@@ -306,7 +347,7 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
     const sheenReflect = clamp(f.sheen, 0, 1).mul(sheenAlbedo(muV, f.sheenRoughness));
     const sheenThrough = float(1).sub(sheenReflect.mul(float(1).sub(gapView)));
 
-    const horizon = texture(t.horizon, st);
+    const horizon = look(t.horizon);
 
     return { st, toFabric, coverage, opacity, weight, gapView, gapNormal, lobeInputs, occlusion: shade.y, yarnTangent, bent, nb, nn, layer, noiseOffset, glintContrast, sheenReflect, sheenThrough, horizon };
   }
