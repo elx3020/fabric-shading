@@ -107,8 +107,9 @@ function sheenLobe(L: V3, V: V3, roughness: F): F {
   const wx = dot(L.xy, X.xy);
   const wy = L.y.mul(X.x).sub(L.x.mul(X.y));
   const aInv = x.mul(2.58126).add(y.mul(0.813703)).mul(y).div(x.mul(x).mul(0.310327).add(x.mul(y).mul(2.60994)).add(1));
-  const b = x.mul(y).mul(y).mul(4.31597).div(x.mul(x).mul(4.48953).sub(x.mul(y).mul(2.61113)).add(y.mul(y).mul(5.23525)).add(1));
-  const ox = aInv.mul(wx).sub(b.mul(L.z));
+  // Zero at normal incidence, where the tangent frame X is arbitrary.
+  const bInv = sqrt(float(1).sub(x)).mul(y.sub(1)).mul(y.mul(y).mul(y)).div(x.mul(1.71228).sub(x.mul(y).mul(1.71506)).add(y.mul(y).mul(1.34174)).add(0.0000254053));
+  const ox = aInv.mul(wx).add(bInv.mul(L.z));
   const oy = aInv.mul(wy);
   const len2 = ox.mul(ox).add(oy.mul(oy)).add(L.z.mul(L.z));
   const k = aInv.div(len2);

@@ -34,11 +34,14 @@ export function sheenLtcAInv(mu: number, roughness: number): number {
   return ((2.58126 * x + 0.813703 * y) * y) / (1 + 0.310327 * x * x + 2.60994 * x * y);
 }
 
-/** LTC skew b (the inverse transform uses -b). */
-export function sheenLtcB(mu: number, roughness: number): number {
+/**
+ * Skew of the inverse LTC, b^-1. It is zero at normal incidence, so the lobe is round there and
+ * the choice of tangent frame (undefined when V = N) doesn't matter.
+ */
+export function sheenLtcBInv(mu: number, roughness: number): number {
   const x = clampMu(mu);
   const y = clampR(roughness);
-  return (4.31597 * x * y * y) / (1 + 4.48953 * x * x - 2.61113 * x * y + 5.23525 * y * y);
+  return (Math.sqrt(1 - x) * (y - 1) * y * y * y) / (0.0000254053 + 1.71228 * x - 1.71506 * x * y + 1.34174 * y * y);
 }
 
 /**
@@ -54,7 +57,7 @@ export function sheenLobe(L: Vec3, V: Vec3, roughness: number): number {
   const wy = L[0] * Y[0] + L[1] * Y[1];
   const wz = L[2];
   const aInv = sheenLtcAInv(mu, roughness);
-  const bInv = -sheenLtcB(mu, roughness);
+  const bInv = sheenLtcBInv(mu, roughness);
   const ox = aInv * wx + bInv * wz;
   const oy = aInv * wy;
   const len2 = ox * ox + oy * oy + wz * wz;
