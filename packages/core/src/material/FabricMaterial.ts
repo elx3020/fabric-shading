@@ -259,18 +259,20 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
     const toFabric = (w: V3): V3 => vec3(dot(w, T), dot(w, B), dot(w, N));
 
     // Parallax (quality tier): march the view ray down through the relief in a few steps and
-    // read every map where it first meets the yarns. Mip levels keep following the plain UVs,
-    // and the offset fades out once a pixel covers several texels, where averaging takes over
+    // read every map where it first meets the yarns. Mip levels keep following the plain UVs
     // (Zhu et al. 2024, sec. 5.2).
     let sp: V2 = st;
     const depth = this.asset.maps.reliefDepth;
     const parallax = this.tier === 'quality' && depth !== undefined;
     if (parallax) {
       const Vf = toFabric(positionViewDirection);
-      const texelsPerPixel = length(fwidth(st)).mul(this.asset.maps.size);
-      const fade = float(1).sub(smoothstep(1, 4, texelsPerPixel)).mul(clamp(f.parallax, 0, 1));
-      // Clamp the slant so grazing views don't smear a yarn across its neighbours.
-      const dir = Vf.xy.div(max(Vf.z, 0.4)).mul(vec2(depth[0], depth[1])).mul(fade);
+      // Fade by how far the offset would move the image on screen: below about a pixel there is
+      // nothing to see, and above that the march reads mip-filtered heights, so it stays stable
+      // even with many repeats on the cloth.
+      const dirFull = Vf.xy.div(max(Vf.z, 0.4)).mul(vec2(depth[0], depth[1]));
+      const offsetPixels = length(dirFull).div(max(length(fwidth(st)), 1e-6));
+      const fade = smoothstep(0.75, 2, offsetPixels).mul(clamp(f.parallax, 0, 1));
+      const dir = dirFull.mul(fade);
       const depthAt = (s: V2): F => float(1).sub(texture(t.shade, s).grad(duv1, duv2).x);
       // Linear search for the first layer below the surface, then intersect the segment between
       // the last two samples (parallax occlusion mapping), which removes the stair steps.
