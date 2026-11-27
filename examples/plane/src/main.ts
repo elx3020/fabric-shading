@@ -2,6 +2,7 @@ import GUI from 'lil-gui';
 import {
   ACESFilmicToneMapping,
   BufferAttribute,
+  type BufferGeometry,
   Color,
   DirectionalLight,
   Mesh,
@@ -18,6 +19,7 @@ import { fabricFromPreset, knitPresets, readFabric, wovenPresets, type FabricAss
 import { FabricMaterial, type FabricTier } from '@fabric-shading/core/material';
 import { createEnvironment } from './environment.ts';
 import { createFpsCounter } from './fps.ts';
+import { roundedBoxGeometry, sphereGeometry } from './shapes.ts';
 
 const status = document.getElementById('status')!;
 
@@ -93,7 +95,14 @@ async function start(): Promise<void> {
   scene.add(marker);
 
   const cloth = new WavingCloth();
-  const mesh = new Mesh(cloth.geometry);
+  const CLOTH_WIDTH = 1.6;
+  const shapes: Record<string, BufferGeometry> = {
+    'waving cloth': cloth.geometry,
+    sphere: sphereGeometry(CLOTH_WIDTH),
+    'rounded box': roundedBoxGeometry(CLOTH_WIDTH),
+  };
+  type Shape = 'waving cloth' | 'sphere' | 'rounded box';
+  const mesh = new Mesh<BufferGeometry>(cloth.geometry);
   scene.add(mesh);
 
   const state = {
@@ -111,6 +120,7 @@ async function start(): Promise<void> {
     environment: 0.5,
     environmentRotation: 0,
     hdrBackground: false,
+    shape: 'waving cloth' as Shape,
     animate: true,
     waves: 0.06,
     lightBehind: false,
@@ -242,6 +252,12 @@ async function start(): Promise<void> {
     )
     .name('View against the light');
   const motion = gui.addFolder('Motion');
+  motion
+    .add(state, 'shape', Object.keys(shapes))
+    .name('Shape')
+    .onChange(() => {
+      mesh.geometry = shapes[state.shape]!;
+    });
   motion.add(state, 'animate').name('Animate');
   motion.add(state, 'waves', 0, 0.2, 0.005).name('Wave height').onChange(applyParams);
 
@@ -261,7 +277,7 @@ async function start(): Promise<void> {
     const now = performance.now();
     if (state.animate) {
       time += (now - last) / 1000;
-      cloth.update(time);
+      if (state.shape === 'waving cloth') cloth.update(time);
     }
     last = now;
     controls.update();
