@@ -86,6 +86,33 @@ function quad(xx: F, yy: F, zz: F, xy: F, xz: F, yz: F, w: V3): F {
     .add(xy.mul(w.x.mul(w.y)).add(xz.mul(w.x.mul(w.z))).add(yz.mul(w.y.mul(w.z))).mul(2));
 }
 
+/** Directional albedo of the sheen layer (rational fit, see lut/sheen.ts). */
+function sheenAlbedo(mu: F, roughness: F): F {
+  const x = clamp(mu, 1e-3, 1);
+  const y = clamp(roughness, 0.01, 1);
+  const s = y.mul(y.mul(1.58491).add(0.0206607)).div(y.mul(y.add(1.32227)).add(0.0379424));
+  const m = y.mul(y.mul(y.mul(float(1.7932).sub(y.mul(y).mul(0.95943))).sub(1.14885)).sub(0.193854)).div(y.add(0.046391));
+  const o = y.mul(y.mul(y.mul(0.119681).sub(0.0207818)).add(0.000654023)).div(y.mul(y.sub(1.92021)).add(1.26264));
+  const g = x.sub(m).div(s);
+  return max(exp(g.mul(g).mul(-0.5)).div(s.mul(Math.sqrt(2 * Math.PI))).add(o), 0);
+}
+
+/** Normalized sheen lobe over L for view V (fabric frame, +z up), cosine included (lut/sheen.ts). */
+function sheenLobe(L: V3, V: V3, roughness: F): F {
+  const x = clamp(V.z, 1e-3, 1);
+  const y = clamp(roughness, 0.01, 1);
+  const X = normalize(vec3(V.x, V.y, 0).add(vec3(1e-5, 0, 0)));
+  const wx = dot(L.xy, X.xy);
+  const wy = L.y.mul(X.x).sub(L.x.mul(X.y));
+  const aInv = x.mul(2.58126).add(y.mul(0.813703)).mul(y).div(x.mul(x).mul(0.310327).add(x.mul(y).mul(2.60994)).add(1));
+  const b = x.mul(y).mul(y).mul(4.31597).div(x.mul(x).mul(4.48953).sub(x.mul(y).mul(2.61113)).add(y.mul(y).mul(5.23525)).add(1));
+  const ox = aInv.mul(wx).sub(b.mul(L.z));
+  const oy = aInv.mul(wy);
+  const len2 = ox.mul(ox).add(oy.mul(oy)).add(L.z.mul(L.z));
+  const k = aInv.div(len2);
+  return max(L.z, 0).mul(1 / Math.PI).mul(k.mul(k));
+}
+
 /**
  * Three.js material for woven and knitted cloth, built from a baked {@link FabricAsset}.
  *
@@ -138,6 +165,12 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
      * 12 cm at 2 m. The sun is 0.0047, which makes a far brighter, sharper cross.
      */
     lightSize: uniform(0.03),
+    /** Fly-away fiber cover, 0..1 (sheen layer, Zeltner et al. 2022 as used by Zhu et al. 2024). */
+    sheen: uniform(0.3),
+    /** Width of the sheen lobe, 0.01..1. */
+    sheenRoughness: uniform(0.5),
+    /** Linear RGB colour of the loose fibers; set from the fiber colour fitted to the cloth. */
+    sheenColor: uniform(new Color(0.8, 0.8, 0.8)),
   };
 
   /**
@@ -176,6 +209,14 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
       const fiber = fitFiberAlbedo(s.albedo, { ...defaultFiberParams, ior: this.fabric.ior.value });
       const w = (1 - f0) ** 2 * defaultFiberParams.clarity * (1 - defaultFiberParams.ttForward);
       this.fabric.fiberTint.value.setRGB(fiber[0] * w, fiber[1] * w, fiber[2] * w);
+      // A loose fiber is seen mostly on its own, so it is paler than the cloth (whose colour comes
+      // from many fibers deep); a few fibers overlap, so take the geometric mean of the two.
+      const [r, g, b] = s.albedo;
+      this.fabric.sheenColor.value.setRGB(Math.sqrt(r * fiber[0]), Math.sqrt(g * fiber[1]), Math.sqrt(b * fiber[2]));
+      if (s.sheen) {
+        this.fabric.sheen.value = s.sheen.amount;
+        this.fabric.sheenRoughness.value = s.sheen.roughness;
+      }
     }
     // Only sheer fabrics need blending.
     this.transparent = (s?.gapFraction ?? 0) > 0.02;
@@ -255,7 +296,12 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
     // Open share of the pattern at normal incidence (two-layer table), for the light side.
     const gapNormal = max(texture(t.twoLayer, vec2(1, 0.25)).w, 1e-4);
 
-    return { st, toFabric, coverage, opacity, weight, gapView, gapNormal, lobeInputs, occlusion: shade.y, yarnTangent, bent, nb, nn, layer, noiseOffset, glintContrast };
+    // Sheen layer on top of everything: it reflects sheenReflect toward the viewer and passes
+    // the rest on (Zhu et al. 2024, eq. 4). Fuzz sits on the yarns, so open gaps have none.
+    const sheenReflect = clamp(f.sheen, 0, 1).mul(sheenAlbedo(muV, f.sheenRoughness));
+    const sheenThrough = float(1).sub(sheenReflect.mul(float(1).sub(gapView)));
+
+    return { st, toFabric, coverage, opacity, weight, gapView, gapNormal, lobeInputs, occlusion: shade.y, yarnTangent, bent, nb, nn, layer, noiseOffset, glintContrast, sheenReflect, sheenThrough };
   }
 
   /** Speckle multipliers (mean 1) for the specular and diffuse parts; see bakeWaveNoise. */
@@ -431,8 +477,10 @@ class FabricLightingModel extends LightingModel {
     const lightOpen = clamp(twoLayerGain.w.div(n.gapNormal), 0, 1);
     const diffracted = m.diffraction(V.add(L)).mul(n.gapView).mul(lightOpen).mul(f.sheerness).mul(back).div(n.opacity);
 
-    out.directDiffuse.addAssign(color.mul(diffuse.add(transmitted).mul(glintDiffuse).mul(n.weight)));
-    out.directSpecular.addAssign(color.mul(glintSpecular.mul(specular).add(diffracted)));
+    // Sheen: fuzz above the yarns reflects its share into a wide lobe; the cloth below gets the rest.
+    const sheen = (f.sheenColor as unknown as V3).mul(n.sheenReflect).mul(sheenLobe(L, V, f.sheenRoughness)).mul(front).mul(n.weight);
+    out.directDiffuse.addAssign(color.mul(diffuse.add(transmitted).mul(glintDiffuse).mul(n.weight).mul(n.sheenThrough)));
+    out.directSpecular.addAssign(color.mul(glintSpecular.mul(specular).add(diffracted).mul(n.sheenThrough).add(sheen)));
   }
 
   override indirect(builder: NodeBuilder): void {
@@ -449,19 +497,22 @@ class FabricLightingModel extends LightingModel {
     const f = m.fabric;
     // Hemispherical average gain: sample the two-layer table at mu = 2/3 (the cosine-weighted mean).
     const gain = texture(m.textures.twoLayer, vec2(2 / 3, 0.25)).rgb;
-    reflectedLight.indirectDiffuse.addAssign(irradiance.add(iblIrradiance).mul(f.color as unknown as V3).mul(gain).mul(n.occlusion).mul(n.weight).mul(1 / Math.PI));
+    const front = irradiance.add(iblIrradiance);
+    reflectedLight.indirectDiffuse.addAssign(front.mul(f.color as unknown as V3).mul(gain).mul(n.occlusion).mul(n.weight).mul(n.sheenThrough).mul(1 / Math.PI));
+    // The sheen lobe is wide, so under environment light it reflects its albedo of the irradiance.
+    reflectedLight.indirectSpecular.addAssign(front.mul(f.sheenColor as unknown as V3).mul(n.sheenReflect).mul(n.weight).mul(1 / Math.PI));
     // Environment light from behind, passed on through the yarn: the forward albedo at the
     // cosine-weighted mean angle, spread diffusely (the narrow share of a broad source is
     // diffuse anyway). Light that crosses the open gaps unscattered is the blended background.
     if (m.backIrradiance) {
       const forward = texture(m.textures.twoLayer, vec2(2 / 3, 0.75)).rgb;
-      reflectedLight.indirectDiffuse.addAssign(m.backIrradiance.mul(forward).mul(n.weight).mul(1 / Math.PI));
+      reflectedLight.indirectDiffuse.addAssign(m.backIrradiance.mul(forward).mul(n.weight).mul(n.sheenThrough).mul(1 / Math.PI));
     }
     // Environment specular: prefiltered radiance times the lobe's directional albedo (Fresnel and
     // slab shadowing included), and the yarn occlusion. See bakeSpecularAlbedo.
     const V = n.toFabric(positionViewDirection);
     const albedoLut = texture(m.textures.specularAlbedo, vec2(clamp(V.z, 0, 1), f.roughness));
     const albedo = (f.fiberTint as unknown as V3).mul(albedoLut.y).add(albedoLut.x);
-    reflectedLight.indirectSpecular.addAssign(radiance.mul(albedo).mul(f.specular).mul(n.occlusion).mul(n.weight));
+    reflectedLight.indirectSpecular.addAssign(radiance.mul(albedo).mul(f.specular).mul(n.occlusion).mul(n.weight).mul(n.sheenThrough));
   }
 }

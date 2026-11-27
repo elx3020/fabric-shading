@@ -2,7 +2,7 @@ import type { TwoLayerLut } from '../lut/twoLayer.ts';
 import type { WaveNoiseTiles } from '../noise/waveNoise.ts';
 import type { WeaveMaps } from '../patterns/bake.ts';
 import type { MomentLevel, TwoLobeLevel } from '../patterns/moments.ts';
-import type { YarnData } from '../presets.ts';
+import type { SheenParams, YarnData } from '../presets.ts';
 import { packHalf, unpackHalf } from './half.ts';
 
 /**
@@ -39,6 +39,8 @@ export interface FabricShading {
    * from the yarn scattering model. Absent in files from before it existed.
    */
   forwardVariance?: number;
+  /** Fly-away fiber sheen. Absent in files from before it existed (the material then uses a default). */
+  sheen?: SheenParams;
 }
 
 export interface FabricAsset {

@@ -103,6 +103,8 @@ async function start(): Promise<void> {
     roughness: 0.35,
     specular: 1,
     glint: 0.5,
+    sheen: 0.3,
+    sheenRoughness: 0.5,
     sheerness: 1,
     environment: 0.5,
     environmentRotation: 0,
@@ -121,9 +123,16 @@ async function start(): Promise<void> {
   let bakeMs = 0;
   let source = '';
 
+  // Set once the GUI exists (the first preset loads before it is built).
+  let refreshGui = (): void => {};
+
   function buildMaterial(): void {
     const old = material;
     material = new FabricMaterial(asset, { tier: state.tier, repeats: state.repeats });
+    // Sheen comes with the fabric (more for cotton and wool); the sliders start from it.
+    state.sheen = material.fabric.sheen.value;
+    state.sheenRoughness = material.fabric.sheenRoughness.value;
+    refreshGui();
     applyParams();
     mesh.material = material;
     old?.dispose();
@@ -137,6 +146,8 @@ async function start(): Promise<void> {
     f.roughness.value = state.roughness;
     f.specular.value = state.specular;
     f.glint.value = state.glint;
+    f.sheen.value = state.sheen;
+    f.sheenRoughness.value = state.sheenRoughness;
     f.sheerness.value = state.sheerness;
     f.lightSize.value = state.lightSize;
     scene.environmentIntensity = state.environment;
@@ -182,6 +193,7 @@ async function start(): Promise<void> {
   });
 
   const gui = new GUI({ title: 'Fabric plane' });
+  refreshGui = () => gui.controllersRecursive().forEach((c) => c.updateDisplay());
   gui
     .add(state, 'preset', Object.fromEntries([...wovenPresets, ...knitPresets].map((p) => [p.label, p.id])))
     .name('Preset')
@@ -193,6 +205,8 @@ async function start(): Promise<void> {
   look.add(state, 'roughness', 0.05, 1, 0.01).name('Fiber roughness').onChange(applyParams);
   look.add(state, 'specular', 0, 3, 0.01).name('Specular').onChange(applyParams);
   look.add(state, 'glint', 0, 1, 0.01).name('Glint').onChange(applyParams);
+  look.add(state, 'sheen', 0, 1, 0.01).name('Sheen (fuzz)').onChange(applyParams);
+  look.add(state, 'sheenRoughness', 0.01, 1, 0.01).name('Sheen roughness').onChange(applyParams);
   look.add(state, 'sheerness', 0, 1, 0.01).name('See-through gaps').onChange(applyParams);
   const lighting = gui.addFolder('Lighting');
   lighting.add(state, 'environment', 0, 2, 0.01).name('Environment').onChange(applyParams);
