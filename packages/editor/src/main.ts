@@ -1,5 +1,5 @@
 import GUI from 'lil-gui';
-import { ACESFilmicToneMapping, Color, DirectionalLight, Mesh, PerspectiveCamera, PlaneGeometry, Scene, SRGBColorSpace, WebGPURenderer } from 'three/webgpu';
+import { ACESFilmicToneMapping, Color, DirectionalLight, Mesh, PerspectiveCamera, Scene, SRGBColorSpace, WebGPURenderer } from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
   bakeKnitMaps,
@@ -39,6 +39,7 @@ import {
 import { FabricMaterial } from '@fabric-shading/core/material';
 import { createEnvironment } from './environment.ts';
 import { createFpsCounter } from './fps.ts';
+import { shapeGeometry, shapeNames, type ShapeName } from './shapes.ts';
 import { makeNoiseTexture, makePreviewMaterial, makeTextures, materialViews, previewUniforms, views, type PreviewTextures, type View } from './preview.ts';
 
 const status = document.getElementById('status')!;
@@ -80,7 +81,9 @@ async function start(): Promise<void> {
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
 
-  const plane = new Mesh(new PlaneGeometry(2, 2));
+  // The cloth preview: a sheet over a hill by default, or a sphere or rounded box (shapes.ts).
+  const PREVIEW_WIDTH = 2;
+  const plane = new Mesh(shapeGeometry('hill', PREVIEW_WIDTH));
   scene.add(plane);
 
   // The lit views use the real FabricMaterial under ordinary three.js lights: a key light
@@ -124,6 +127,7 @@ async function start(): Promise<void> {
     noiseHighOrder: defaultWaveNoiseParams.highOrderCorrelation,
     noiseSeed: defaultWaveNoiseParams.seed,
     repeats: 8,
+    shape: 'hill' as ShapeName,
     lightAzimuth: 40,
     lightElevation: 50,
     keyLight: 2.5,
@@ -546,7 +550,15 @@ async function start(): Promise<void> {
 
   const viewFolder = gui.addFolder('Preview');
   viewFolder.add(state, 'view', views).name('Show').onChange(rebuildMaterial);
-  viewFolder.add(state, 'repeats', 1, 64, 1).name('Repeats on plane').onChange(updateLight);
+  viewFolder
+    .add(state, 'shape', shapeNames)
+    .name('Shape')
+    .onChange(() => {
+      const old = plane.geometry;
+      plane.geometry = shapeGeometry(state.shape, PREVIEW_WIDTH);
+      old.dispose();
+    });
+  viewFolder.add(state, 'repeats', 1, 64, 1).name('Repeats per plane width').onChange(updateLight);
   viewFolder.addColor(state, 'color').name('Color').onChange(updateLight).onFinishChange(rebakeTwoLayer);
   viewFolder.add(state, 'roughness', 0.05, 1, 0.01).name('Fiber roughness (SGGX)').onChange(updateLight);
   viewFolder.add(state, 'thickness', 0.1, 10, 0.1).name('Optical thickness (SGGX)').onChange(updateLight);
