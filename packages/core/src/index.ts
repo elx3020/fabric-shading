@@ -9,11 +9,12 @@ export {
   satinWeave,
   twillWeave,
   YarnKind,
+  yarnNormal,
   type WeaveParams,
   type WeavePattern,
   type WeaveSample,
 } from './patterns/weave.ts';
-export { bakeKnitMaps, bakeWeaveMaps, decodeYarnId, defaultBakeOptions, type BakeOptions, type WeaveMaps } from './patterns/bake.ts';
+export { bakeKnitMaps, bakeWeaveMaps, decodeYarnId, defaultBakeOptions, deriveYarnNormals, type BakeOptions, type WeaveMaps } from './patterns/bake.ts';
 export {
   defaultKnitParams,
   garterKnit,

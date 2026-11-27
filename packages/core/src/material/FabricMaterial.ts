@@ -125,6 +125,12 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
     beamRatio: uniform(new Vector2(2, 2)),
     /** Concentration of the forward glow around a light seen through the yarn (1 / variance). */
     forwardKappa: uniform(4),
+    /**
+     * Share of the diffuse and transmitted light shaded with the yarn normal rather than the
+     * macro normal, 0..1 (1 - w in Yang et al.'s diffuse term). Shows the round yarns up close;
+     * the normal's mips fade it into flat shading at a distance.
+     */
+    yarnNormal: uniform(0.75),
   };
 
   /** Shared per-pixel nodes the lighting model reads. */
@@ -209,10 +215,10 @@ export class FabricMaterial extends MeshStandardNodeMaterial {
       lobeInputs = [{ m: [a.x, a.y, a.z, b.x, b.y], w: a.w }];
     }
 
-    // Noise instance per ply and short yarn segment; frame bent by the round cross-section.
-    const across = weave.z.mul(2).sub(1);
-    const side = normalize(vec3(yarnTangent.y.negate(), yarnTangent.x, 0));
-    const bent = normalize(vec3(0, 0, 1).mul(sqrt(max(float(1).sub(across.mul(across)), 0.05))).add(side.mul(across)));
+    // Yarn shading normal from the baked map; its mips average it toward the macro normal.
+    const yarnN = texture(t.normal, st).xyz.mul(2).sub(1);
+    const bent = yarnN.div(max(length(yarnN), 1e-3));
+    // Noise instance per ply and short yarn segment, in a frame bent by the yarn cross-section.
     const nb = normalize(cross(bent, yarnTangent));
     const nn = cross(yarnTangent, nb);
     const cell = floor(st);
@@ -354,6 +360,10 @@ class FabricLightingModel extends LightingModel {
     const front = step(0, L.z);
     const back = float(1).sub(front);
     const mu = abs(L.z);
+    // Cosine on the yarn surface (Yang et al. 2026, eq. 2): blend the macro normal's with the
+    // yarn normal's. Light from behind enters the back of the yarn, the front normal mirrored.
+    const yarnN = vec3(n.bent.x, n.bent.y, select(front.greaterThan(0), n.bent.z, n.bent.z.negate()));
+    const muShade = mix(mu, max(dot(L, yarnN), 0), f.yarnNormal);
     const twoLayerGain = texture(m.textures.twoLayer, vec2(mu, 0.25));
     const forward = texture(m.textures.twoLayer, vec2(mu, 0.75));
     const [glintSpecular, glintDiffuse] = m.glints(H, V);
@@ -362,7 +372,7 @@ class FabricLightingModel extends LightingModel {
     const out = reflectedLight as unknown as Record<'directDiffuse' | 'directSpecular', V3>;
 
     // Front: Lambert-like body reflection scaled by the inter-layer bounces, and fiber specular.
-    const diffuse = albedo.mul(twoLayerGain.rgb).mul(n.occlusion).mul(mu.mul(1 / Math.PI)).mul(front);
+    const diffuse = albedo.mul(twoLayerGain.rgb).mul(n.occlusion).mul(muShade.mul(1 / Math.PI)).mul(front);
     const specular = m.specular(L, V, H).mul(front);
     // Back: transmission through the yarn, split into light that kept close to straight
     // through (a von Mises-Fisher lobe around -L, Zhu et al.'s forward yarn lobe) and light
@@ -370,7 +380,7 @@ class FabricLightingModel extends LightingModel {
     const kappa = f.forwardKappa;
     const lobe = exp(kappa.mul(dot(V, L.negate()).sub(1))).mul(kappa.div(float(1).sub(exp(kappa.mul(-2))).mul(2 * Math.PI)));
     const spread = mix(float(1 / Math.PI), lobe, forward.w);
-    const transmitted = forward.rgb.mul(mu).mul(spread).mul(back);
+    const transmitted = forward.rgb.mul(muShade).mul(spread).mul(back);
     // Gap light is seen through pixels that are mostly transparent; undo the blend's alpha.
     // Diffracted light leaves through the open gaps under this pixel (the far-field average
     // when they are unresolved), as far as they stay open toward the light too.

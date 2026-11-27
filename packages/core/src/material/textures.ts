@@ -14,6 +14,7 @@ import { packHalf } from '../asset/half.ts';
 import type { FabricAsset } from '../asset/fabricFile.ts';
 import { bakeDiffractionLut, type DiffractionLut } from '../lut/diffraction.ts';
 import { bakeSpecularAlbedo } from '../lut/specularAlbedo.ts';
+import { deriveYarnNormals } from '../patterns/bake.ts';
 
 /** GPU textures for one fabric. Create with {@link createFabricTextures}, free with {@link disposeFabricTextures}. */
 export interface FabricTextures {
@@ -23,6 +24,11 @@ export interface FabricTextures {
   relief: DataTexture;
   /** Height, occlusion, gap with a mip chain, for shading that must not alias. */
   shade: DataTexture;
+  /**
+   * Yarn shading normal (RGB, 0..1 encoded) with box-filtered mips: sharp up close, averaging
+   * toward the macro normal once many yarns share a pixel.
+   */
+  normal: DataTexture;
   momentA: DataTexture;
   momentB: DataTexture;
   /** Quality tier; absent when the asset has no two-lobe mips. */
@@ -60,18 +66,11 @@ function mipChain(levels: { size: number; data: Float32Array }[]): DataTexture {
   return t;
 }
 
-/** Box-filtered mips of the relief's height, occlusion and gap channels (yarn ids don't filter). */
-function shadeTexture(relief: Uint8Array, size: number): DataTexture {
-  const levels: { data: Uint8Array; width: number; height: number }[] = [];
+/** A repeating RGBA8 texture with box-filtered mips down to 1x1. */
+function u8MipChain(base: Uint8Array, size: number): DataTexture {
+  const levels: { data: Uint8Array; width: number; height: number }[] = [{ data: base, width: size, height: size }];
   let n = size;
-  let level = new Uint8Array(size * size * 4);
-  for (let i = 0; i < size * size; i++) {
-    level[i * 4] = relief[i * 4]!;
-    level[i * 4 + 1] = relief[i * 4 + 1]!;
-    level[i * 4 + 2] = relief[i * 4 + 2]!;
-    level[i * 4 + 3] = 255;
-  }
-  levels.push({ data: level, width: n, height: n });
+  let level = base;
   while (n > 1) {
     const m = n >> 1;
     const next = new Uint8Array(m * m * 4);
@@ -87,13 +86,25 @@ function shadeTexture(relief: Uint8Array, size: number): DataTexture {
     n = m;
     levels.push({ data: level, width: n, height: n });
   }
-  const t = repeat(new DataTexture(levels[0]!.data, size, size, RGBAFormat, UnsignedByteType));
+  const t = repeat(new DataTexture(base, size, size, RGBAFormat, UnsignedByteType));
   t.mipmaps = levels;
   t.magFilter = LinearFilter;
   t.minFilter = LinearMipmapLinearFilter;
   t.generateMipmaps = false;
   t.needsUpdate = true;
   return t;
+}
+
+/** Box-filtered mips of the relief's height, occlusion and gap channels (yarn ids don't filter). */
+function shadeTexture(relief: Uint8Array, size: number): DataTexture {
+  const base = new Uint8Array(size * size * 4);
+  for (let i = 0; i < size * size; i++) {
+    base[i * 4] = relief[i * 4]!;
+    base[i * 4 + 1] = relief[i * 4 + 1]!;
+    base[i * 4 + 2] = relief[i * 4 + 2]!;
+    base[i * 4 + 3] = 255;
+  }
+  return u8MipChain(base, size);
 }
 
 let sharedDiffraction: { texture: DataTexture; lut: DiffractionLut } | undefined;
@@ -138,6 +149,7 @@ export function createFabricTextures(asset: FabricAsset): FabricTextures {
     weave,
     relief,
     shade: shadeTexture(maps.relief, maps.size),
+    normal: u8MipChain(maps.normal ?? deriveYarnNormals(maps), maps.size),
     momentA: mipChain(asset.moments.map((l) => ({ size: l.size, data: l.a }))),
     momentB: mipChain(asset.moments.map((l) => ({ size: l.size, data: l.b }))),
     ...(asset.twoLobes
@@ -160,6 +172,6 @@ export function createFabricTextures(asset: FabricAsset): FabricTextures {
 
 /** Frees one fabric's textures; the shared diffraction table stays. */
 export function disposeFabricTextures(t: FabricTextures): void {
-  for (const tex of [t.weave, t.relief, t.shade, t.momentA, t.momentB, t.twoLayer, t.noise, t.specularAlbedo]) tex.dispose();
+  for (const tex of [t.weave, t.relief, t.shade, t.normal, t.momentA, t.momentB, t.twoLayer, t.noise, t.specularAlbedo]) tex.dispose();
   if (t.lobes) for (const tex of [t.lobes.a, t.lobes.b, t.lobes.c]) tex.dispose();
 }
